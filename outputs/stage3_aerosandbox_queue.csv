@@ -1,0 +1,2 @@
+n_props,prop_diameter_in,prop_pitch_ratio,prop_family,baseline_span_m,baseline_chord_m,baseline_low_speed_mps,baseline_cruise_speed_mps,seed_low_speed_rpm,seed_cruise_rpm,refine_variables,status
+8,7.0,0.9,cruise,2.0,0.35,4.0,10.0,5693.4,5274.9,"chord,taper,washout,flap_span,flap_chord,flap_deflection,prop_y_shift",READY_FOR_AEROSANDBOX

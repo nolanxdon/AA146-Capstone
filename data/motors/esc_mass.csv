@@ -1,0 +1,48 @@
+# Electronic Speed Controller (ESC) mass vs continuous current rating
+# Values are representative of common BLHeli-S and BLHeli-32 ESCs used in small
+# UAS, cross-referenced with product listings from T-Motor, Hobbywing,
+# Castle Creations, and iPeaka.
+# Replace with selected vendor values during detailed design.
+#
+# Approximate scaling: m_esc [g] ~ a * I_cont [A]^0.9
+# See mass_model.py for the fitted coefficients.
+#
+# -----------------------------------------------------------------------------
+# Data provenance / reference links (product pages with current + mass):
+#   Hobbywing XRotor Micro 8A BLHeli_S:
+#     https://www.hobbywing.com/en/products/xrotor-micro-8a.html
+#   Hobbywing XRotor Micro 15A BLHeli_S:
+#     https://www.hobbywing.com/en/products/xrotor-micro-15a.html
+#   BLHeli_S 20A generic (AIKON/EMAX/DYS):
+#     https://emaxmodel.com/products/emax-bullet-series-20a-esc
+#   Hobbywing XRotor 30A:
+#     https://www.hobbywing.com/en/products/xrotor-micro-30a.html
+#   Castle Creations Talon 40A:
+#     https://www.castlecreations.com/en/talon-series/talon-40-esc-010-0128-00
+#   Hobbywing Platinum 60A V4:
+#     https://www.hobbywing.com/en/products/platinum-60a-v4.html
+#   T-Motor Flame 80A:
+#     https://store.tmotor.com/product/flame-80a-hv.html
+#   Hobbywing Platinum 100A HV:
+#     https://www.hobbywing.com/en/products/platinum-100a-v4.html
+#   Castle Creations Edge HV 120:
+#     https://www.castlecreations.com/en/edge-hv-series/edge-hv-120-esc-010-0109-00
+#   General ESC mass-vs-current scaling discussion (CADR):
+#     https://mdpi.com/2226-4310/8/5/126
+# -----------------------------------------------------------------------------
+#
+# Columns:
+#   current_a : continuous current rating, A
+#   mass_g    : bare-ESC mass excluding connectors and heatshrink, grams
+#   example   : representative model
+#
+current_a,mass_g,example
+8,5,mini_BLHeli_S_8A
+15,8,Hobbywing_15A
+20,11,BLHeli_S_20A
+30,17,Hobbywing_30A
+40,28,Castle_Talon_40A
+60,42,Hobbywing_Platinum_60A
+80,62,T-Motor_Flame_80A
+100,85,Hobbywing_100A_HV
+120,110,Castle_Edge_HV_120

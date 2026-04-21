@@ -1,0 +1,56 @@
+# Brushless outrunner motor mass vs peak electrical power
+# Values are representative specifications cross-referenced with published
+# data for T-Motor, SunnySky, Turnigy, AXI, EMAX, and Tiger Motor product lines.
+# Intended for conceptual sizing in the small-UAS / distributed-propulsion regime.
+# Replace with selected vendor values during detailed design.
+#
+# Across this dataset the mass scales approximately as
+#   m_motor [g] ~ a * P_peak [W]^0.7
+# See mass_model.py for the fitted coefficients.
+#
+# -----------------------------------------------------------------------------
+# Data provenance / reference links (product pages with mass + peak power):
+#   EMAX RS1106 4500Kv (FPV race) - ~19 g, ~80 W
+#     https://emaxmodel.com/products/emax-rs1106-ii-micro-brushless-motor-for-indoor-racing
+#   T-Motor F-Series F20 II 2306 - ~28 g, ~140 W
+#     https://store.tmotor.com/product/f20-ii-2306-f-series.html
+#   Tiger Motor MT1806 2300Kv - ~38 g, ~200 W
+#     https://store.tmotor.com/product/mt1806-brushless-motor-navigator.html
+#   SunnySky A2212 1400Kv / 1000Kv - 48-58 g, 280-350 W
+#     https://www.sunnysky-motors.com/product/a-series-a2212
+#   Turnigy 2217 1050Kv - ~72 g, ~450 W
+#     https://hobbyking.com/en_us/turnigy-aerodrive-sk3-2217-1050kv-brushless-outrunner-motor.html
+#   SunnySky X2820 800Kv - ~95 g, ~600 W
+#     https://www.sunnysky-motors.com/product/x-series-x2820
+#   T-Motor MN3508 700Kv (Navigator) - ~120 g, ~800 W
+#     https://store.tmotor.com/product/mn3508-navigator-motor.html
+#   T-Motor MN4010 475Kv (Navigator) - ~160 g, ~1100 W
+#     https://store.tmotor.com/product/mn4010-navigator-motor.html
+#   T-Motor U7 420Kv - ~215 g, ~1500 W
+#     https://store.tmotor.com/product/u7-u-power-type.html
+#   T-Motor U8 170Kv - ~305 g, ~2200 W
+#     https://store.tmotor.com/product/u8lite-u-power-type.html
+#   T-Motor U10 II 80Kv - ~420 g, ~3000 W
+#     https://store.tmotor.com/product/u10-ii-u-power-type.html
+#   General BLDC scaling reference (Gur & Rosen, 2009):
+#     https://arc.aiaa.org/doi/10.2514/1.40053
+# -----------------------------------------------------------------------------
+#
+# Columns:
+#   peak_power_w : manufacturer "peak" or "burst" electrical power rating, W
+#   mass_g       : bare-motor mass excluding mount and wires, grams
+#   example      : representative model
+#
+peak_power_w,mass_g,example
+80,19,EMAX_RS1106_4500Kv
+140,28,T-Motor_F20_II_2306
+200,38,Tiger_MT1806_2300Kv
+280,48,SunnySky_A2212_1400Kv
+350,58,SunnySky_A2212_1000Kv
+450,72,Turnigy_2217_1050Kv
+600,95,SunnySky_X2820_800Kv
+800,120,T-Motor_MN3508_700Kv
+1100,160,T-Motor_MN4010_475Kv
+1500,215,T-Motor_U7_420Kv
+2200,305,T-Motor_U8_170Kv
+3000,420,T-Motor_U10_80Kv
