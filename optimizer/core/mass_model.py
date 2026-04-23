@@ -166,7 +166,6 @@ def _least_squares(x: Sequence[float], y: Sequence[float]) -> Tuple[float, float
 
 
 def fit_power_law(xs: Sequence[float], ys: Sequence[float]) -> PowerLawFit:
-    log_x = [math.log(xi) for xi in xs if xi > 0 and next(yi for yi in ys) > 0]
     # Build consistent paired log data
     pairs = [(math.log(xi), math.log(yi)) for xi, yi in zip(xs, ys) if xi > 0 and yi > 0]
     log_x = [p[0] for p in pairs]

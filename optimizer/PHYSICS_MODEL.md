@@ -1,158 +1,382 @@
 # Physics Model Notes
 
-This is the living reference for the physics, equations, assumptions, and modeling choices used in the blown-wing concept optimizer.
+This file is the living reference for the optimizer physics, constraints, and output definitions.
 
-It is intended to be updated as the project evolves from:
-
-1. Stage 1 coarse Pareto screening
-2. Stage 2 prop-span sizing
-3. Stage 3 AeroSandbox refinement
-
-The current document reflects the **implemented Stage 1 model** in:
+It currently documents the implemented **Stage 1 V2** model in:
 
 - [optimizer/core/data_models.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/data_models.py:1)
 - [optimizer/core/physics.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/physics.py:1)
+- [optimizer/core/mass_model.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/mass_model.py:1)
 - [optimizer/stages/stage1_screen.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/stages/stage1_screen.py:1)
 
-## Purpose
+## Scope
 
-The current optimizer is a **coarse concept-selection tool** for distributed propulsion on a blown wing. It is currently built to downselect:
+The current optimizer is a **coarse concept screener** for distributed propulsion on a blown wing. It is intended to downselect:
 
-- number of propellers
+- propeller count
 - propeller diameter
 - propeller pitch ratio
-- coarse prop family
+- coarse propeller family
 
-In the current Phase 1 implementation, low-speed RPM and cruise RPM are **solved operating points**, not outer-loop design variables.
+The Stage 1 model is fast and intentionally approximate. It is useful for pruning the architecture space before Stage 2 spanwise prop sizing and Stage 3 AeroSandbox refinement.
 
-The present Stage 1 model is **not** a final propeller-sizing method. It is a fast screening model to identify promising architectures before higher-fidelity analysis.
+## Current Mission And Geometry Assumptions
 
-## Current Mission Assumptions
+The default mission and aircraft assumptions are:
 
-The default mission assumptions currently implemented are:
-
-- Gross mass: $m = 5.0 \ \mathrm{kg}$
-- Max mass: $m_{\max} = 5.0 \ \mathrm{kg}$
-- Span: $b = 2.0 \ \mathrm{m}$
-- Chord: $c = 0.35 \ \mathrm{m}$
-- Battery voltage: $V_{\mathrm{batt}} = 14.8 \ \mathrm{V}$
-- Low-speed flight point: $V_{\infty,\mathrm{low}} = 4.0 \ \mathrm{m/s}$
-- Cruise / loiter flight point: $V_{\infty,\mathrm{cruise}} = 10.0 \ \mathrm{m/s}$
-- Loiter time: $t_{\mathrm{loiter}} = 18 \ \mathrm{min}$
-
-Atmospheric constants:
-
-- Air density: $\rho = 1.225 \ \mathrm{kg/m^3}$
-- Gravity: $g = 9.80665 \ \mathrm{m/s^2}$
-- Speed of sound: $a = 343.0 \ \mathrm{m/s}$
-
-Aerodynamic constants:
-
-- Oswald efficiency factor: $e = 0.8$
-- Flapped section $C_{L,\max}$: $C_{L,\max,\mathrm{flapped}} = 2.2$
-- Clean section $C_{L,\max}$: $C_{L,\max,\mathrm{clean}} = 1.4$
-- Maximum blowing lift increment parameter: $\Delta C_{L,\mu,\max} = 0.8$
-- Flapped zero-lift drag parameter: $C_{D0,\mathrm{flapped}} = 0.11$
-- Clean zero-lift drag parameter: $C_{D0,\mathrm{clean}} = 0.05$
-- Trim drag factor: $f_{\mathrm{trim}} = 1.05$
-
-Propulsion and system assumptions:
-
-- Electrical chain efficiency:
+- Gross flight mass:
   $$
-  \eta_{\mathrm{elec}} = 0.72
+  m_{\mathrm{gross}} = 5.0 \ \mathrm{kg}
   $$
-- Avionics hotel load:
+- Maximum built mass:
   $$
-  P_{\mathrm{avionics}} = 10 \ \mathrm{W}
+  m_{\max} = 5.0 \ \mathrm{kg}
   $$
-- Tip Mach limit:
+- Fixed non-propulsion mass:
   $$
-  M_{\mathrm{tip,max}} = 0.55
+  m_{\mathrm{fixed}} = 2.0 \ \mathrm{kg}
   $$
+- Wing span:
+  $$
+  b = 2.0 \ \mathrm{m}
+  $$
+- Wing chord:
+  $$
+  c = 0.35 \ \mathrm{m}
+  $$
+- Wing area:
+  $$
+  S = bc = 0.70 \ \mathrm{m^2}
+  $$
+- Aspect ratio:
+  $$
+  AR = \frac{b^2}{S}
+  $$
+- Battery voltage:
+  $$
+  V_{\mathrm{batt}} = 14.8 \ \mathrm{V}
+  $$
+- Low-speed flight point:
+  $$
+  V_{\infty,\mathrm{low}} = 4.0 \ \mathrm{m/s}
+  $$
+- Cruise / loiter flight point:
+  $$
+  V_{\infty,\mathrm{cruise}} = 10.0 \ \mathrm{m/s}
+  $$
+- Loiter time:
+  $$
+  t_{\mathrm{loiter}} = 18 \ \mathrm{min}
+  $$
+- Additional low-speed energy segment charged to the battery:
+  $$
+  t_{\mathrm{climb}} = 1.5 \ \mathrm{min}
+  $$
+
+Atmosphere and constants:
+
+- Air density:
+  $$
+  \rho = 1.225 \ \mathrm{kg/m^3}
+  $$
+- Dynamic viscosity:
+  $$
+  \mu = 1.81 \times 10^{-5} \ \mathrm{Pa \cdot s}
+  $$
+- Gravity:
+  $$
+  g = 9.80665 \ \mathrm{m/s^2}
+  $$
+- Speed of sound:
+  $$
+  a = 343.0 \ \mathrm{m/s}
+  $$
+
+## Aerodynamic Assumptions
+
+- Oswald efficiency:
+  $$
+  e = 0.8
+  $$
+- Flapped baseline section lift ceiling before blowing:
+  $$
+  C_{L,\max,\mathrm{flapped}} = 2.2
+  $$
+- Flapped section ceiling used by the Stage 1 blown-lift model:
+  $$
+  C_{L,\mathrm{ceil}} = 2.0
+  $$
+- Clean section lift ceiling:
+  $$
+  C_{L,\max,\mathrm{clean}} = 1.4
+  $$
+- Flapped zero-lift drag parameter:
+  $$
+  C_{D0,\mathrm{flapped}} = 0.11
+  $$
+- Clean zero-lift drag parameter:
+  $$
+  C_{D0,\mathrm{clean}} = 0.05
+  $$
+- Trim drag multiplier:
+  $$
+  f_{\mathrm{trim}} = 1.05
+  $$
+- Blown profile drag multiplier:
+  $$
+  f_{\mathrm{blown}} = 1.05
+  $$
+- Unblown profile drag multiplier:
+  $$
+  f_{\mathrm{unblown}} = 1.0
+  $$
+- Slipstream span-expansion factor:
+  $$
+  k_{\mathrm{exp}} = 0.8
+  $$
+
+The Stage 1 low-speed model treats the wing as two zones:
+
+- unblown area
+- blown area
+
+with span coverage determined from the placed propeller disk intervals, not from a simple average-spacing formula.
+
+## Blown-Lift Model
+
+The Stage 1 blown-lift model is based on a wing-reference momentum coefficient:
+
+$$
+C_\mu = \frac{T}{q_\infty S}
+$$
+
+where
+
+$$
+q_\infty = \frac{1}{2} \rho V_\infty^2
+$$
+
+and \(T\) is the total propeller thrust at the low-speed operating point.
+
+The local blown-section lift increment is modeled as:
+
+$$
+\Delta C_{L,\mu} =
+\begin{cases}
+0, & C_\mu < C_{\mu,\min} \\
+k_{C\mu}\sqrt{C_\mu}, & C_\mu \ge C_{\mu,\min}
+\end{cases}
+$$
+
+with:
+
+- \(k_{C\mu} = 1.8\)
+- \(C_{\mu,\min} = 0.02\)
+
+The blown-section lift ceiling is then:
+
+$$
+C_{L,\max,b} = \min \left( C_{L,\max,\mathrm{flapped}} + \Delta C_{L,\mu}, \ C_{L,\mathrm{ceil}} \right)
+$$
+
+The unblown section uses:
+
+$$
+C_{L,\max,u} = \min \left( C_{L,\max,\mathrm{flapped}}, \ C_{L,\mathrm{ceil}} \right)
+$$
 
 ## Stage 1 Design Variables
 
-The current Stage 1 screen varies:
+The current Stage 1 sweep spans:
 
 - Number of props:
   $$
-  N_{\mathrm{prop}} \in \{4,6,8,10,12\}
+  N_{\mathrm{prop}} \in \{4,6,8,10,12,14,16\}
   $$
 - Prop diameter:
   $$
-  D \in \{4.5, 5.0, 5.5, 6.0, 6.5, 7.0\} \ \mathrm{in}
+  D \in \{4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 9.0, 10.0\} \ \mathrm{in}
   $$
 - Prop pitch ratio:
   $$
-  \frac{P}{D} \in \{0.4,0.5,0.6,0.7,0.8,0.9\}
+  \frac{P}{D} \in \{0.40,0.50,0.60,0.70,0.80,0.90\}
   $$
 - Prop family:
   $$
   \{\mathrm{high\_thrust}, \mathrm{balanced}, \mathrm{cruise}\}
   $$
 
-For each architecture, the solver computes:
+Low-speed RPM and cruise RPM are **not** swept. They are solved internally with a bisection root solve.
 
-- low-speed RPM
-- cruise RPM
-
-by solving the required operating-point conditions internally.
-
-## Wing Geometry Model
-
-The wing is currently treated as a fixed rectangular planform.
-
-Wing area:
+The total candidate count is:
 
 $$
-S = bc
+7 \times 11 \times 6 \times 3 = 1386
 $$
 
-With the current assumptions:
+## Propeller Surrogate
+
+Stage 1 still uses a coarse propeller surrogate. It is not yet a UIUC-backed prop database.
+
+Each prop family defines:
+
+- a baseline static thrust coefficient \(C_{T,\mathrm{base}}\)
+- a baseline static power coefficient \(C_{P,\mathrm{base}}\)
+- an advance-ratio scale \(J_{\mathrm{crit}}\)
+
+The operating advance ratio is:
 
 $$
-S = 2.0 \times 0.35 = 0.70 \ \mathrm{m^2}
+J = \frac{V}{nD}
 $$
 
-Aspect ratio:
+where
 
 $$
-\mathrm{AR} = \frac{b^2}{S}
+n = \frac{\mathrm{RPM}}{60}
 $$
 
-## Dynamic Pressure
-
-The current model uses:
+Pitch ratio adjusts the family static coefficients:
 
 $$
-q = \frac{1}{2} \rho V^2
+C_{T,\mathrm{static}} =
+C_{T,\mathrm{base}}
+\left(\frac{P/D}{(P/D)_{\mathrm{ref}}}\right)^{0.35}
 $$
 
-This is used at both low speed and cruise, and again for the blown region using the local blown velocity.
+$$
+C_{P,\mathrm{static}} =
+C_{P,\mathrm{base}}
+\left(\frac{P/D}{(P/D)_{\mathrm{ref}}}\right)^{0.80}
+$$
 
-## Packing Model
+In code, these static terms are then multiplied by smooth decay factors in \(J\) and by a blade Reynolds penalty factor.
 
-The current prop placement model is symmetric about the fuselage.
+## Blade Reynolds Penalty
 
-Each half-wing must satisfy:
+Stage 1 derates small/slow propellers using a blade Reynolds correction at the \(0.75R\) station.
 
-- fuselage keep-out
-- inboard prop clearance from fuselage
-- inter-prop edge clearance
-- wingtip margin
+Tangential blade speed:
 
-The currently implemented geometric margins are:
+$$
+V_\theta = 2 \pi \left(0.75 \frac{D}{2}\right) n
+$$
+
+Resultant local speed:
+
+$$
+V_{\mathrm{res}} = \sqrt{V_\theta^2 + V_\infty^2}
+$$
+
+Blade chord is approximated by:
+
+$$
+c_{\mathrm{blade}} = \left(\frac{c}{D}\right)_{\mathrm{blade}} D
+$$
+
+with
+
+$$
+\left(\frac{c}{D}\right)_{\mathrm{blade}} = 0.10
+$$
+
+Blade Reynolds number:
+
+$$
+Re_{\mathrm{blade}} = \frac{\rho V_{\mathrm{res}} c_{\mathrm{blade}}}{\mu}
+$$
+
+The thrust and power coefficients are derated by:
+
+$$
+f_{Re} = \max \left( f_{\min}, \ \min \left(1,\left(\frac{Re_{\mathrm{blade}}}{Re_{\mathrm{ref}}}\right)^m \right) \right)
+$$
+
+with:
+
+- \(Re_{\mathrm{ref}} = 80000\)
+- \(m = 0.30\)
+- \(f_{\min} = 0.60\)
+
+## Propeller Thrust, Power, Torque, And Tip Mach
+
+Per-prop thrust:
+
+$$
+T_{\mathrm{per}} = C_T \rho n^2 D^4
+$$
+
+Per-prop shaft power:
+
+$$
+P_{\mathrm{shaft,per}} = C_P \rho n^3 D^5
+$$
+
+Total thrust:
+
+$$
+T_{\mathrm{total}} = N_{\mathrm{prop}} T_{\mathrm{per}}
+$$
+
+Total shaft power:
+
+$$
+P_{\mathrm{shaft,total}} = N_{\mathrm{prop}} P_{\mathrm{shaft,per}}
+$$
+
+Total electrical power:
+
+$$
+P_{\mathrm{elec,total}} =
+\frac{P_{\mathrm{shaft,total}}}{\eta_{\mathrm{chain}}}
++
+P_{\mathrm{avionics}}
+$$
+
+with:
+
+- \(\eta_{\mathrm{chain}} = 0.72\)
+- \(P_{\mathrm{avionics}} = 10 \ \mathrm{W}\)
+
+Per-prop torque:
+
+$$
+\tau_{\mathrm{per}} = \frac{P_{\mathrm{shaft,per}}}{2 \pi n}
+$$
+
+Tip speed:
+
+$$
+V_{\mathrm{tip}} = \sqrt{(\pi D n)^2 + V_\infty^2}
+$$
+
+Tip Mach:
+
+$$
+M_{\mathrm{tip}} = \frac{V_{\mathrm{tip}}}{a}
+$$
+
+Stage 1 constrains:
+
+$$
+M_{\mathrm{tip}} \le 0.55
+$$
+
+## Prop Packing Model
+
+Stage 1 places props symmetrically about the fuselage. Only even prop counts are allowed.
+
+The current clearances are:
 
 - fuselage width:
   $$
   w_f = 0.20 \ \mathrm{m}
   $$
-- fuselage-to-inboard-prop clearance:
+- fuselage-to-inboard-prop edge clearance:
   $$
   c_f = 1.0 \ \mathrm{in}
   $$
-- adjacent prop clearance:
+- inter-prop edge clearance:
   $$
   c_p = 1.0 \ \mathrm{in}
   $$
@@ -161,233 +385,49 @@ The currently implemented geometric margins are:
   c_t = 1.5 \ \mathrm{in}
   $$
 
-This is implemented explicitly through placed prop centers, not average spacing.
-
-## Blown Span Fraction
-
-The current model estimates the span fraction influenced by prop slipstream using:
-
-$$
-w_{\mathrm{blown}} = k_{\mathrm{exp}} D
-$$
-
-where:
-
-$$
-k_{\mathrm{exp}} = 0.8
-$$
-
-Each prop creates a spanwise interval of influence centered on its span location. Overlapping intervals are merged, and the blown span fraction is:
-
-$$
-\eta_b = \frac{\text{total merged blown span}}{b}
-$$
-
-This is more realistic than the earlier crude assumption:
-
-$$
-\eta_b \approx \frac{N_{\mathrm{prop}} k_{\mathrm{exp}} D}{b}
-$$
-
-but it is still a coarse span-coverage model.
-
-## Propeller Model
-
-### Important Note
-
-The current Stage 1 propeller model is a **surrogate placeholder**.
-
-It is **not** based on real UIUC prop data yet.
-
-The current model defines three coarse prop families, each with:
-
-- a baseline static thrust coefficient
-- a baseline static power coefficient
-- a characteristic advance-ratio scale
-
-These are hand-built engineering placeholders for screening only.
-
-### Advance Ratio
-
-For a prop running at rotational speed $n$ rev/s:
-
-$$
-n = \frac{\mathrm{RPM}}{60}
-$$
-
-Advance ratio is:
-
-$$
-J = \frac{V}{nD}
-$$
-
-### Surrogate Coefficients
-
-The current Stage 1 model forms coarse static coefficients from pitch ratio:
-
-$$
-C_{T,\mathrm{static}} = C_{T,\mathrm{base}}
-\left(
-\frac{(P/D)}{(P/D)_{\mathrm{ref}}}
-\right)^{0.35}
-$$
-
-$$
-C_{P,\mathrm{static}} = C_{P,\mathrm{base}}
-\left(
-\frac{(P/D)}{(P/D)_{\mathrm{ref}}}
-\right)^{0.80}
-$$
-
-Then a hand-built decay with $J$ is used to compute operating $C_T$ and $C_P$.
-
-This gives:
-
-$$
-C_T = C_{T,\mathrm{static}} \cdot f_T(J)
-$$
-
-$$
-C_P = C_{P,\mathrm{static}} \cdot f_P(J)
-$$
-
-where $f_T$ and $f_P$ are surrogate decay functions defined in code.
-
-## Propeller Thrust and Power
-
-The current propeller equations are:
-
-### Per-prop thrust
-
-$$
-T_{\mathrm{per}} = C_T \rho n^2 D^4
-$$
-
-### Per-prop shaft power
-
-$$
-P_{\mathrm{shaft,per}} = C_P \rho n^3 D^5
-$$
-
-### Total thrust
-
-$$
-T_{\mathrm{total}} = N_{\mathrm{prop}} T_{\mathrm{per}}
-$$
-
-### Total shaft power
-
-$$
-P_{\mathrm{shaft,total}} = N_{\mathrm{prop}} P_{\mathrm{shaft,per}}
-$$
-
-### Total electrical power
-
-$$
-P_{\mathrm{elec,total}} =
-\frac{P_{\mathrm{shaft,total}}}{\eta_{\mathrm{elec}}}
-+
-P_{\mathrm{avionics}}
-$$
-
-### Per-prop torque
-
-$$
-\tau_{\mathrm{per}} =
-\frac{P_{\mathrm{shaft,per}}}{2\pi n}
-$$
-
-### Tip speed and tip Mach
-
-Tip speed is approximated as:
-
-$$
-V_{\mathrm{tip}} =
-\sqrt{(\pi D n)^2 + V^2}
-$$
-
-and tip Mach is:
-
-$$
-M_{\mathrm{tip}} = \frac{V_{\mathrm{tip}}}{a}
-$$
-
-## RPM Solve Strategy
-
-Phase 1 no longer sweeps RPM as a grid variable. Instead, it solves for the **minimum feasible RPM** at each flight condition.
-
-### Low-speed RPM solve
-
-At low speed, the required thrust is taken as the maximum of:
-
-1. thrust needed to exceed the drag requirement with margin
-2. thrust needed to generate the required blown velocity
-
-$$
-T_{\mathrm{req,low}} =
-\max
-\left(
-\gamma_{\mathrm{low}} D_{\mathrm{low}},
-T_{\mathrm{req}}(V_{\mathrm{eff,req}})
-\right)
-$$
-
-The solver then finds RPM such that:
-
-$$
-R_{\mathrm{low}}(\mathrm{RPM}) =
-T(\mathrm{RPM}) - T_{\mathrm{req,low}} = 0
-$$
-
-using a bisection root solve over the configured RPM bounds.
-
-### Cruise RPM solve
-
-At cruise, the required thrust is:
-
-$$
-T_{\mathrm{req,cruise}} = \gamma_{\mathrm{cruise}} D_{\mathrm{cruise}}
-$$
-
-and the solver finds RPM such that:
-
-$$
-R_{\mathrm{cruise}}(\mathrm{RPM}) =
-T(\mathrm{RPM}) - T_{\mathrm{req,cruise}} = 0
-$$
-
-again using a bisection root solve.
+The placed prop centers define disk intervals and blown intervals. Feasibility requires nonnegative:
+
+- packing margin
+- fuselage margin
+- inter-prop margin
+- tip margin
 
 ## Slipstream Velocity Model
 
-The current model uses an ideal actuator-disk estimate to convert thrust into an effective local blown velocity.
-
-Total prop disk area:
+Total disk area:
 
 $$
-A_{\mathrm{disk}} = N_{\mathrm{prop}} \pi \left( \frac{D}{2} \right)^2
+A_{\mathrm{disk}} = N_{\mathrm{prop}} \pi \left(\frac{D}{2}\right)^2
 $$
 
-Induced velocity:
+Using an ideal actuator-disk estimate:
 
 $$
 v_i = \sqrt{\frac{T_{\mathrm{total}}}{2 \rho A_{\mathrm{disk}}}}
 $$
 
-Effective blown velocity:
+The Stage 1 effective blown velocity is:
 
 $$
-V_{\mathrm{eff}} = V_{\infty} + 2v_i
+V_{\mathrm{eff}} = V_\infty + 2 v_i
 $$
 
-This is currently used as a span-averaged representative blown velocity.
+The inverse form is also used to compute the thrust needed to achieve a required blown velocity:
 
-## Low-Speed Lift Model
+$$
+T_{\mathrm{req}}(V_{\mathrm{eff,req}})
+=
+2 \rho A_{\mathrm{disk}}
+\left(\frac{V_{\mathrm{eff,req}} - V_\infty}{2}\right)^2
+$$
 
-The low-speed model uses a two-zone wing:
+## Low-Speed Two-Zone Lift And Drag
 
-- unblown section
-- blown section
+Blown span fraction:
+
+$$
+\eta_b = \frac{\text{merged blown span}}{b}
+$$
 
 Wing areas:
 
@@ -402,11 +442,11 @@ $$
 Dynamic pressures:
 
 $$
-q_\infty = \frac{1}{2} \rho V_\infty^2
+q_\infty = \frac{1}{2}\rho V_{\infty,\mathrm{low}}^2
 $$
 
 $$
-q_b = \frac{1}{2} \rho V_{\mathrm{eff}}^2
+q_b = \frac{1}{2}\rho V_{\mathrm{eff}}^2
 $$
 
 Reference required lift coefficient:
@@ -415,38 +455,16 @@ $$
 C_{L,\mathrm{req,ref}} = \frac{W}{q_\infty S}
 $$
 
-where:
+with
 
 $$
-W = mg
+W = m_{\mathrm{gross}} g
 $$
 
-### Blowing lift increment
-
-The current Stage 1 model uses a simple saturating blown-lift increment:
+Maximum unblown lift:
 
 $$
-\Delta C_{L,\mu}
-=
-\Delta C_{L,\mu,\max}
-\left(
-1 - e^{-((V_{\mathrm{eff}}/V_\infty)^2 - 1)}
-\right)
-$$
-
-and the blown-section local max lift is:
-
-$$
-C_{L,\max,b} =
-C_{L,\max,\mathrm{flapped}} + \Delta C_{L,\mu}
-$$
-
-### Lift allocation
-
-The unblown section is assumed to operate up to its local max first:
-
-$$
-L_{u,\max} = q_\infty S_u C_{L,\max,\mathrm{flapped}}
+L_{u,\max} = q_\infty S_u C_{L,\max,u}
 $$
 
 Remaining lift:
@@ -455,348 +473,360 @@ $$
 L_{\mathrm{rem}} = W - L_{u,\max}
 $$
 
-If:
+If \(L_{\mathrm{rem}} \le 0\), the blown region is not needed and \(V_{\mathrm{eff,req}} = V_\infty\).
+
+Otherwise:
 
 $$
-L_{\mathrm{rem}} \le 0
+q_{b,\mathrm{req}} = \frac{L_{\mathrm{rem}}}{S_b C_{L,\max,b}}
 $$
 
-then the blown region is not needed.
+$$
+V_{\mathrm{eff,req}} = \sqrt{\frac{2 q_{b,\mathrm{req}}}{\rho}}
+$$
 
-Otherwise the blown section must satisfy:
+The local blown-section required lift coefficient is:
 
 $$
 C_{L,\mathrm{req},b} = \frac{L_{\mathrm{rem}}}{q_b S_b}
 $$
 
-and feasibility requires:
+and low-speed lift is feasible if:
 
 $$
 C_{L,\mathrm{req},b} \le C_{L,\max,b}
 $$
 
-## Drag Model
-
-### Induced drag factor
-
-The current model uses:
+The induced-drag factor is:
 
 $$
-k = \frac{1}{\pi e \mathrm{AR}}
+k = \frac{1}{\pi e AR}
 $$
 
-### Low-speed two-zone drag
-
-The current Stage 1 model assigns separate drag coefficients to the unblown and blown regions:
+Unblown-section drag coefficient:
 
 $$
-C_{D,u}
-=
+C_{D,u} =
 f_{\mathrm{trim}}
 \left(
-f_u C_{D0,\mathrm{flapped}} + k C_{L,u}^2
+f_{\mathrm{unblown}} C_{D0,\mathrm{flapped}} + k C_{L,u}^2
 \right)
 $$
 
+Blown-section drag coefficient:
+
 $$
-C_{D,b}
-=
+C_{D,b} =
 f_{\mathrm{trim}}
 \left(
-f_b C_{D0,\mathrm{flapped}} + k C_{L,b}^2
+f_{\mathrm{blown}} C_{D0,\mathrm{flapped}} + k C_{L,b}^2
 \right)
 $$
-
-with:
-
-- $f_u = 1.0$
-- $f_b = 1.05$
 
 Low-speed drag:
 
 $$
-D_u = q_\infty S_u C_{D,u}
+D_{\mathrm{low}} = q_\infty S_u C_{D,u} + q_b S_b C_{D,b}
 $$
 
-$$
-D_b = q_b S_b C_{D,b}
-$$
+## Cruise Lift And Drag
+
+Cruise dynamic pressure:
 
 $$
-D_{\mathrm{low}} = D_u + D_b
+q_{\mathrm{cruise}} = \frac{1}{2}\rho V_{\infty,\mathrm{cruise}}^2
 $$
 
-### Cruise drag
-
-Cruise uses a simpler single-zone drag model:
-
-$$
-C_{D,\mathrm{cruise}} = C_{D0,\mathrm{clean}} + k C_{L,\mathrm{cruise}}^2
-$$
-
-$$
-D_{\mathrm{cruise}} = q_{\mathrm{cruise}} S C_{D,\mathrm{cruise}}
-$$
-
-where:
+Cruise lift coefficient:
 
 $$
 C_{L,\mathrm{cruise}} = \frac{W}{q_{\mathrm{cruise}} S}
 $$
 
-## Mission Energy Model
-
-The current loiter-energy objective is:
+Cruise drag coefficient:
 
 $$
-E_{\mathrm{loiter}} = P_{\mathrm{elec,cruise}} \cdot \frac{t_{\mathrm{loiter}}}{60}
+C_{D,\mathrm{cruise}} = C_{D0,\mathrm{clean}} + k C_{L,\mathrm{cruise}}^2
 $$
 
-where:
-
-- $P_{\mathrm{elec,cruise}}$ is in watts
-- $t_{\mathrm{loiter}}$ is in minutes
-- $E_{\mathrm{loiter}}$ is in watt-hours
-
-## Current Optimization Objectives
-
-Stage 1 currently minimizes:
-
-1. Low-speed electrical power
-   $$
-   \min P_{\mathrm{elec,low}}
-   $$
-2. Loiter energy at cruise
-   $$
-   \min E_{\mathrm{loiter}}
-   $$
-
-These are Pareto-sorted after the full grid search.
-
-## Current Constraints
-
-A Stage 1 concept is currently feasible only if all of the following hold:
-
-### Geometry / packing
+Cruise drag:
 
 $$
-\text{packing margin} \ge 0
+D_{\mathrm{cruise}} = q_{\mathrm{cruise}} S C_{D,\mathrm{cruise}}
 $$
 
-including:
-
-- fuselage clearance
-- inter-prop clearance
-- wingtip clearance
-
-### Low-speed lift feasibility
-
-Blown-wing lift must close at the low-speed point.
-
-### Cruise lift feasibility
+Cruise is feasible if:
 
 $$
 C_{L,\mathrm{cruise}} \le C_{L,\max,\mathrm{clean}}
 $$
 
-### Thrust margins
+## RPM Solve Strategy
 
-Low speed:
+Stage 1 solves the minimum feasible RPM at each operating point with a bisection method.
+
+At low speed, the required thrust is:
 
 $$
-T_{\mathrm{low}} \ge
-\max
-\left(
-1.05 \, D_{\mathrm{low}},
+T_{\mathrm{req,low}} =
+\max \left(
+\gamma_{\mathrm{low}} D_{\mathrm{low}},
 T_{\mathrm{req}}(V_{\mathrm{eff,req}})
 \right)
 $$
 
-Cruise:
+with:
 
 $$
-T_{\mathrm{cruise}} \ge 1.02 \, D_{\mathrm{cruise}}
+\gamma_{\mathrm{low}} = 1.05
 $$
 
-### Tip Mach
+The solver finds:
 
 $$
-M_{\mathrm{tip}} \le 0.55
+R_{\mathrm{low}}(\mathrm{RPM}) =
+T(\mathrm{RPM}) - T_{\mathrm{req,low}} = 0
 $$
 
-### RPM ordering
+At cruise:
 
 $$
-\mathrm{RPM}_{\mathrm{low,solved}} \ge \mathrm{RPM}_{\mathrm{cruise,solved}}
+T_{\mathrm{req,cruise}} = \gamma_{\mathrm{cruise}} D_{\mathrm{cruise}}
 $$
 
-## Known Stage 1 Biases and Limitations
+with:
 
-The current Stage 1 model has known biases.
+$$
+\gamma_{\mathrm{cruise}} = 1.02
+$$
 
-### Large-diameter bias
+The solver finds:
 
-The current first-pass model tends to favor larger diameter because:
+$$
+R_{\mathrm{cruise}}(\mathrm{RPM}) =
+T(\mathrm{RPM}) - T_{\mathrm{req,cruise}} = 0
+$$
 
-- thrust scales with $D^4$
-- larger diameter usually reduces power for a required thrust in the surrogate
-- larger diameter also increases blown span fraction through:
+The low-speed RPM must be at least the cruise RPM:
+
+$$
+\mathrm{RPM}_{\mathrm{low}} \ge \mathrm{RPM}_{\mathrm{cruise}}
+$$
+
+## Motor Inference And Mass Closure
+
+Stage 1 does not select catalog motors. It infers motor requirements from the prop operating points.
+
+Peak current per motor:
+
+$$
+I_{\mathrm{motor}} =
+\frac{\max(P_{\mathrm{elec,low}}, P_{\mathrm{elec,cruise}})}{V_{\mathrm{batt}} N_{\mathrm{prop}}}
+$$
+
+Required motor \(k_V\):
+
+$$
+k_V \approx \frac{\mathrm{RPM}_{\mathrm{low}}}{0.85 V_{\mathrm{batt}}}
+$$
+
+Propulsion mass is estimated from CSV-based power-law fits stored in:
+
+- [data/propellers/propeller_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/propellers/propeller_mass.csv:1)
+- [data/motors/motor_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/motors/motor_mass.csv:1)
+- [data/motors/esc_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/motors/esc_mass.csv:1)
+
+The fitted closures are:
+
+$$
+m_{\mathrm{prop}} \sim a_p D^{b_p}(1 + k_p P/D)
+$$
+
+$$
+m_{\mathrm{motor}} \sim a_m P_{\mathrm{shaft,peak}}^{b_m}
+$$
+
+$$
+m_{\mathrm{ESC}} \sim a_e I_{\mathrm{motor}}^{b_e}
+$$
+
+Battery mass is estimated from mission energy plus reserve:
+
+$$
+E_{\mathrm{usable}} =
+P_{\mathrm{low}} \frac{t_{\mathrm{climb}}}{60}
++
+P_{\mathrm{cruise}} \frac{t_{\mathrm{loiter}}}{60}
+$$
+
+$$
+E_{\mathrm{pack}} = E_{\mathrm{usable}}(1 + f_{\mathrm{reserve}})
+$$
+
+$$
+m_{\mathrm{battery}} = \frac{E_{\mathrm{pack}}}{\epsilon_{\mathrm{battery}}}
+$$
+
+with:
+
+- \(f_{\mathrm{reserve}} = 0.20\)
+- \(\epsilon_{\mathrm{battery}} = 180 \ \mathrm{Wh/kg}\)
+
+Total built mass:
+
+$$
+m_{\mathrm{built}} = m_{\mathrm{fixed}} + m_{\mathrm{propulsion}} + m_{\mathrm{battery}}
+$$
+
+Feasibility requires:
+
+$$
+m_{\mathrm{built}} \le m_{\max}
+$$
+
+## Objectives
+
+The current Pareto front is three-dimensional:
+
+1. minimize low-speed electrical power
+2. minimize cruise loiter energy
+3. minimize propulsion mass
+
+In symbols:
+
+$$
+\min P_{\mathrm{low}}
+$$
+
+$$
+\min E_{\mathrm{loiter}}
+$$
+
+$$
+\min m_{\mathrm{propulsion}}
+$$
+
+where
+
+$$
+E_{\mathrm{loiter}} = P_{\mathrm{cruise}} \frac{t_{\mathrm{loiter}}}{60}
+$$
+
+## Reported Metrics
+
+Stage 1 currently reports:
+
+- solved low-speed RPM
+- solved cruise RPM
+- low-speed and cruise electrical power
+- loiter energy
+- low-speed and cruise thrust
+- low-speed and cruise drag
+- effective blown velocity and required blown velocity
+- blown span fraction
+- reference low-speed \(C_L\) requirement
+- cruise \(C_L\) requirement
+- blown-section \(C_{L,\max}\)
+- thrust-to-drag ratio
+- disk loading:
   $$
-  \eta_b \uparrow \ \text{as} \ D \uparrow
+  \frac{T}{A_{\mathrm{disk}}}
   $$
+- momentum coefficient \(C_\mu\)
+- torque, shaft power, current, and inferred \(k_V\)
+- blade Reynolds number and Reynolds penalty factor
+- propulsion mass, battery mass, total built mass
+- packing, thrust, lift, disk-loading, and mass margins
 
-### Surrogate prop data
+## Feasibility Conditions
 
-The current $C_T$ and $C_P$ values are placeholder surrogates, not measured prop data.
+A Stage 1 concept is feasible only if all of the following are satisfied:
 
-### Coarse blown-lift model
+- packing margin \(\ge 0\)
+- low-speed lift feasible
+- cruise lift feasible
+- low-speed \(V_{\mathrm{eff}} \ge V_{\mathrm{eff,req}}\)
+- low-speed thrust margin \(\ge 0\)
+- cruise thrust margin \(\ge 0\)
+- low-speed tip Mach margin \(\ge 0\)
+- cruise tip Mach margin \(\ge 0\)
+- RPM schedule margin \(\ge 0\)
+- disk loading within:
+  $$
+  25 \le \frac{T}{A_{\mathrm{disk}}} \le 500 \ \mathrm{N/m^2}
+  $$
+- mass budget margin \(\ge 0\)
 
-The current $\Delta C_{L,\mu}$ model is a simple saturation curve and is not yet calibrated to real blown-wing data.
+## Stage 2 And Stage 3 Handoff
 
-### Drag is not a full buildup
+Stage 2 currently converts the Stage 1 Pareto front into a prop-span layout report with:
 
-The current model does **not** yet include detailed:
+- prop center locations
+- packing margins
+- blown span fraction
+- per-prop thrust, power, and torque at low speed and cruise
 
-- fuselage drag
-- tail drag
-- landing gear drag
-- flap system drag buildup beyond coarse $C_{D0}$ terms
-- interference drag
-- detailed spanwise induced effects
+Stage 3 now performs a fixed-span AeroSandbox refinement pass for every Stage 2 shortlisted concept.
 
-### Average blown velocity
+The current Stage 3 geometry variables are:
 
-The current model uses a representative $V_{\mathrm{eff}}$, not a resolved spanwise slipstream field.
+- root chord
+- taper ratio
+- washout
+- flap span fraction
+- flap chord fraction
+- aileron span fraction
+- aileron chord fraction
+- horizontal-tail volume coefficient
+- vertical-tail volume coefficient
 
-## Planned Stage 2 Improvements
+Stage 3 uses `asb.Opti` to minimize a weighted geometry score built from:
 
-Stage 2 is expected to replace or improve:
+- low-speed power proxy, scaled from Stage 1 using the refined required blown velocity
+- cruise power proxy, scaled from Stage 1 using a refined cruise-drag proxy
+- wing area penalty
+- control-surface area penalty
+- tail-sizing penalties
 
-- surrogate $C_T/C_P$ with real prop data
-- average blown velocity with per-prop spanwise influence
-- coarse motor inference with explicit motor requirements
-- coarse lift increment with a more defensible blown-lift model
+subject to:
 
-## Planned Stage 3 Improvements
+- fixed span
+- cruise \(C_L\) limit
+- required blown velocity not exceeding the selected propulsor architecture's Stage 1 capability
+- minimum horizontal-tail and vertical-tail sizing
+- geometric separation between flaps and ailerons
 
-Stage 3 is expected to add AeroSandbox-based refinement for:
+After solving the continuous geometry variables, Stage 3 builds an AeroSandbox airplane model with:
 
-- wing geometry
-- twist / washout
-- flap geometry
-- higher-fidelity aerodynamic closure
+- a refined trapezoidal main wing using `S1210`
+- a horizontal tail with elevator
+- a vertical tail with rudder
+- a fuselage for geometry / visualization context
 
-## Update Log
+Stage 3 then evaluates:
 
-### Current
+- cruise alpha and cruise drag using `VortexLatticeMethod`
+- aileron, elevator, and rudder authority from incremental VLM runs
+- clean and flapped section polars for `S1210` using NeuralFoil-backed AeroSandbox airfoil calls
 
-- Added Stage 1 Pareto screener
-- Added explicit symmetric prop placement and packing
-- Added 18-minute loiter mission
-- Added current coarse thrust, drag, lift, and energy formulations
-- Replaced outer-loop RPM sweeps with internal bisection solves for low-speed and cruise operating points
+Stage 3 writes:
 
-### Next Recommended Update
+- `outputs/stage3_aerosandbox_queue.csv`
+- `outputs/stage3_aerosandbox_results.csv`
+- `outputs/stage3_aerosandbox_top_designs.csv`
+- `outputs/stage3_visuals/` with planform, three-view, wireframe, polar, mesh, and trade-space artifacts
 
-- Replace surrogate prop families with real UIUC-backed prop interpolation
-- Add a separate momentum or disk-loading metric to better study small-diameter / high-slipstream concepts
+## Known Limitations
 
----
+The current Stage 1 / Stage 3 stack is still approximate:
 
-## V2 Upgrade Notes (current implementation)
+- propeller aerodynamics are surrogate-based, not UIUC-backed yet
+- slipstream is treated with a span-averaged actuator-disk model
+- no full spanwise prop-slipstream interaction model is used yet inside AeroSandbox
+- Stage 3 optimizes around a weighted proxy objective rather than a full mission optimization
+- low-speed blowing is enforced through required-\(V_{\mathrm{eff}}\) compatibility with the Stage 1 propulsor architecture, not through a fully coupled prop-wing CFD/VLM solve
+- no explicit structural sizing or aeroelastic model is included yet
 
-Stage 1 has been upgraded with a propulsion-mass penalty, a Cμ-based blown-lift model, a blade Reynolds penalty on prop coefficients, disk-loading bounds, and a 5 kg mass-budget closure. The Pareto front is now three-dimensional.
+## Update Rule
 
-### Propulsion-mass penalty
-
-Commercial component masses are fit by power laws against three CSV databases (APC Electric-E propellers, brushless outrunner motors, BLHeli ESCs). See [data/propellers/propeller_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/propellers/propeller_mass.csv), [data/motors/motor_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/motors/motor_mass.csv), [data/motors/esc_mass.csv](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/data/motors/esc_mass.csv) for data and source URLs. The fits are done at import in [optimizer/core/mass_model.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/mass_model.py:1):
-
-$$
-m_{\mathrm{prop}}[\mathrm{g}] = 0.1029 \, D_{\mathrm{in}}^{2.504} \, \left( 1 + 0.014 \, \tfrac{P}{D} \right)
-$$
-
-$$
-m_{\mathrm{motor}}[\mathrm{g}] = 0.3955 \, P_{\mathrm{peak}}^{0.860}
-$$
-
-$$
-m_{\mathrm{esc}}[\mathrm{g}] = 0.3553 \, I_{\mathrm{cont}}^{1.178}
-$$
-
-Total propulsion mass is $N_{\mathrm{prop}} \cdot (m_{\mathrm{prop}} + m_{\mathrm{motor}} + m_{\mathrm{esc}})$. Peak shaft power per motor is taken as the maximum of the low-speed and cruise operating points. Peak continuous current per motor is the peak electrical power divided by pack voltage and motor count.
-
-### Battery mass closure
-
-Battery mass is sized from mission energy plus reserve:
-
-$$
-E_{\mathrm{usable}} = P_{\mathrm{low}} \, \tfrac{t_{\mathrm{climb}}}{60} + P_{\mathrm{cruise}} \, \tfrac{t_{\mathrm{loiter}}}{60}
-$$
-
-$$
-m_{\mathrm{batt}} = \frac{(1 + f_{\mathrm{res}}) E_{\mathrm{usable}}}{e_{\mathrm{batt}}}
-$$
-
-with $e_{\mathrm{batt}} = 180 \ \mathrm{Wh/kg}$ (pack-level LiPo), $f_{\mathrm{res}} = 0.20$, and $t_{\mathrm{climb}} = 1.5 \ \mathrm{min}$.
-
-### Mass-budget constraint
-
-The total built mass is
-
-$$
-m_{\mathrm{tot}} = m_{\mathrm{fixed}} + m_{\mathrm{prop,tot}} + m_{\mathrm{batt}}
-$$
-
-with $m_{\mathrm{fixed}} = 2.0 \ \mathrm{kg}$ covering airframe, avionics, payload, and servos. Feasibility requires $m_{\mathrm{tot}} \le 5.0 \ \mathrm{kg}$.
-
-### Cμ-based blown lift
-
-The saturating exponential ΔCL model is replaced with a momentum-coefficient formulation. The blown section lift increment is
-
-$$
-\Delta C_{L,\mu} = k_{C\mu} \sqrt{C_\mu}, \qquad C_\mu = \frac{T_{\mathrm{total}}}{q_\infty S}
-$$
-
-with $k_{C\mu} = 1.8$ (literature range 1.5–2.5) and a deadband $C_\mu \ge 0.02$ below which blowing is treated as inactive. The section ceiling was raised to $C_{L,\mathrm{ceil}} = 3.2$ so the $\sqrt{C_\mu}$ scaling can actually express high-Cμ designs.
-
-### Blade Reynolds penalty
-
-CT and CP are multiplied by a blade-Reynolds derate
-
-$$
-f_{Re} = \max\left( f_{\min}, \ \min\left(1, \left(\tfrac{Re}{Re_{\mathrm{ref}}}\right)^{0.30}\right) \right)
-$$
-
-with $Re_{\mathrm{ref}} = 80000$, floor $f_{\min} = 0.60$. The blade Reynolds number is evaluated at $0.75 R$ using the resultant velocity (rotational + freestream) and $c = 0.10 D$.
-
-### Decoupled j_critical
-
-$J_{\mathrm{critical}}$ is now set directly by the prop family (not multiplied by pitch ratio), so thrust-and-power roll-off with advance ratio is a prop-family property rather than a geometry artifact.
-
-### Disk-loading bounds
-
-Feasibility now also requires
-
-$$
-25 \ \mathrm{N/m^2} \le T_{\mathrm{low}} / A_{\mathrm{disk}} \le 500 \ \mathrm{N/m^2}
-$$
-
-to reject under-loaded concepts (where slipstream is meaningless) and over-loaded concepts (where slipstream assumptions break).
-
-### Three-dimensional Pareto front
-
-The screen now filters on three objectives:
-
-1. $\min P_{\mathrm{elec,low}}$
-2. $\min E_{\mathrm{loiter}}$
-3. $\min m_{\mathrm{prop,tot}}$
-
-A candidate is Pareto-optimal if no feasible peer is better-or-equal in all three and strictly better in at least one. See [optimizer/core/pareto.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/pareto.py:1).
-
-### Sweep grid (V2)
-
-- $N_{\mathrm{prop}} \in \{4, 6, 8, 10, 12, 14, 16\}$
-- $D \in \{4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 9.0, 10.0\}$ in
-- $P/D \in \{0.40, 0.50, 0.60, 0.70, 0.80, 0.90\}$
-- RPM brackets: low $\in [4000, 14000]$, cruise $\in [3000, 11000]$
-
+Whenever the Stage 1 equations, constraints, output schema, or mass model change, this file should be updated in the same edit pass as the code.

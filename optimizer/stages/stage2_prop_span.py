@@ -14,6 +14,26 @@ from optimizer.core.physics import (
 
 INPUT_CSV = Path("outputs/stage1_pareto_front.csv")
 OUTPUT_CSV = Path("outputs/stage2_prop_span_report.csv")
+STAGE2_FIELDNAMES = [
+    "n_props",
+    "prop_diameter_in",
+    "prop_pitch_ratio",
+    "prop_family",
+    "solved_low_speed_rpm",
+    "solved_cruise_rpm",
+    "prop_centers_m",
+    "blown_span_fraction",
+    "packing_margin_m",
+    "fuselage_margin_m",
+    "inter_prop_margin_m",
+    "tip_margin_m",
+    "per_prop_low_speed_thrust_n",
+    "per_prop_cruise_thrust_n",
+    "per_prop_low_speed_power_w",
+    "per_prop_cruise_power_w",
+    "per_prop_low_speed_torque_nm",
+    "per_prop_cruise_torque_nm",
+]
 
 
 def _parse_candidate(row: dict[str, str]) -> Stage1Candidate:
@@ -72,7 +92,7 @@ def run_stage2(mission: Stage1MissionConfig | None = None) -> list[dict[str, str
     OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_CSV.open("w", newline="", encoding="utf-8") as f:
         if reports:
-            writer = csv.DictWriter(f, fieldnames=list(reports[0].keys()))
+            writer = csv.DictWriter(f, fieldnames=STAGE2_FIELDNAMES)
             writer.writeheader()
             writer.writerows(reports)
 

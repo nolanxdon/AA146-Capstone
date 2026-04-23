@@ -1,0 +1,553 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{siunitx}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\sisetup{
+  per-mode=symbol,
+  group-separator={,}
+}
+
+\title{Stage 1 Mathematical Formulation for the Blown-Wing Concept Optimizer}
+\author{AA146 Capstone Optimizer Notes}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document formalizes the current Stage 1 implementation of the blown-wing concept optimizer in the repository. The formulation corresponds to the present code path rather than to any stale or previously generated CSV artifact. Stage 1 is a coarse, architecture-level screening tool that evaluates distributed-propulsion configurations for a fixed-span wing using a surrogate propeller model, a two-zone blown/unblown wing model, a bisection-based operating-point solve, and a three-objective Pareto filter. The purpose of Stage 1 is not final flight-vehicle certification or high-fidelity aerodynamic closure; rather, it is to eliminate weak architectures and pass viable configurations to higher-fidelity downstream analysis.
+\end{abstract}
+
+\section{Problem Definition}
+
+Stage 1 screens a discrete propulsion design space while holding the baseline wing span and baseline Stage 1 chord fixed. The screened design variables are
+\begin{equation}
+\mathbf{x} =
+\left\{
+N_p,\;
+D,\;
+\frac{P}{D},\;
+f_{\mathrm{prop}}
+\right\},
+\end{equation}
+where \(N_p\) is the propeller count, \(D\) is propeller diameter, \(P/D\) is propeller pitch ratio, and \(f_{\mathrm{prop}}\) is a coarse propeller-family label in the set
+\(\{\texttt{high\_thrust}, \texttt{balanced}, \texttt{cruise}\}\).
+
+Stage 1 then solves the low-speed and cruise RPMs internally. Thus RPM is an operating-state variable, not an outer-loop design variable.
+
+\section{Fixed Inputs and Assumptions}
+
+\subsection{Mission and mass assumptions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llc}
+\toprule
+Symbol & Quantity & Value \\
+\midrule
+\(m_{\mathrm{gross}}\) & Gross flight mass & \SI{5.0}{kg} \\
+\(m_{\max}\) & Maximum built mass & \SI{5.0}{kg} \\
+\(m_{\mathrm{fixed}}\) & Fixed non-propulsion mass & \SI{2.0}{kg} \\
+\(V_{\mathrm{batt}}\) & Battery voltage & \SI{14.8}{V} \\
+\(\epsilon_{\mathrm{batt}}\) & Battery specific energy & \SI{180}{Wh/kg} \\
+\(f_{\mathrm{reserve}}\) & Battery reserve fraction & 0.20 \\
+\(t_{\mathrm{climb}}\) & Low-speed energy segment & \SI{1.5}{min} \\
+\(t_{\mathrm{loiter}}\) & Loiter duration & \SI{18.0}{min} \\
+\(V_{\infty,\mathrm{low}}\) & Low-speed flight condition & \SI{4.0}{m/s} \\
+\(V_{\infty,\mathrm{cruise}}\) & Cruise flight condition & \SI{10.0}{m/s} \\
+\bottomrule
+\end{tabular}
+\caption{Global mission and mass assumptions used by Stage 1.}
+\end{table}
+
+\subsection{Atmospheric assumptions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llc}
+\toprule
+Symbol & Quantity & Value \\
+\midrule
+\(\rho\) & Air density & \SI{1.225}{kg/m^3} \\
+\(\mu\) & Dynamic viscosity & \SI{1.81e-5}{Pa.s} \\
+\(g\) & Gravity & \SI{9.80665}{m/s^2} \\
+\(a\) & Speed of sound & \SI{343.0}{m/s} \\
+\bottomrule
+\end{tabular}
+\caption{Atmospheric constants used throughout Stage 1.}
+\end{table}
+
+\subsection{Baseline wing and aerodynamic assumptions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llc}
+\toprule
+Symbol & Quantity & Value \\
+\midrule
+\(b\) & Span & \SI{2.0}{m} \\
+\(c\) & Baseline Stage 1 chord & \SI{0.35}{m} \\
+\(S\) & Baseline Stage 1 wing area & \SI{0.70}{m^2} \\
+\(AR\) & Baseline aspect ratio & 5.714 \\
+\(e\) & Oswald efficiency factor & 0.8 \\
+\(C_{L,\max,\mathrm{flapped}}\) & Baseline flapped section lift ceiling & 2.2 \\
+\(C_{L,\mathrm{ceil}}\) & Enforced wing-system lift ceiling & 2.0 \\
+\(C_{L,\max,\mathrm{clean}}\) & Clean section lift ceiling & 1.4 \\
+\(C_{D0,\mathrm{flapped}}\) & Flapped profile drag parameter & 0.11 \\
+\(C_{D0,\mathrm{clean}}\) & Clean profile drag parameter & 0.05 \\
+\(f_{\mathrm{trim}}\) & Trim drag multiplier & 1.05 \\
+\(f_{\mathrm{blown}}\) & Blown profile drag multiplier & 1.05 \\
+\(f_{\mathrm{unblown}}\) & Unblown profile drag multiplier & 1.0 \\
+\(k_{\mathrm{exp}}\) & Slipstream span expansion factor & 0.8 \\
+\bottomrule
+\end{tabular}
+\caption{Baseline wing and aerodynamic constants.}
+\end{table}
+
+\subsection{Packing assumptions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llc}
+\toprule
+Symbol & Quantity & Value \\
+\midrule
+\(w_f\) & Fuselage width & \SI{0.20}{m} \\
+\(c_f\) & Fuselage-to-inboard-prop edge clearance & \SI{1.0}{in} \\
+\(c_p\) & Inter-prop edge clearance & \SI{1.0}{in} \\
+\(c_t\) & Wingtip edge margin & \SI{1.5}{in} \\
+\bottomrule
+\end{tabular}
+\caption{Stage 1 prop-packing assumptions.}
+\end{table}
+
+\subsection{Electrical, solver, and limit assumptions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llc}
+\toprule
+Symbol & Quantity & Value \\
+\midrule
+\(\eta_{\mathrm{chain}}\) & Electrical chain efficiency & 0.72 \\
+\(P_{\mathrm{av}}\) & Avionics power & \SI{10}{W} \\
+\(\gamma_{\mathrm{low}}\) & Low-speed thrust margin multiplier & 1.05 \\
+\(\gamma_{\mathrm{cruise}}\) & Cruise thrust margin multiplier & 1.02 \\
+\(M_{\mathrm{tip,max}}\) & Tip Mach limit & 0.55 \\
+\(\mathrm{RPM}_{\mathrm{low}}\) bounds & Low-speed RPM bracket & \([4000,\,14000]\) \\
+\(\mathrm{RPM}_{\mathrm{cruise}}\) bounds & Cruise RPM bracket & \([3000,\,11000]\) \\
+\(\Delta \mathrm{RPM}_{\mathrm{tol}}\) & RPM bisection tolerance & \SI{5}{rpm} \\
+\(\left(T/A\right)_{\min}\) & Minimum disk loading & \SI{25}{N/m^2} \\
+\(\left(T/A\right)_{\max}\) & Maximum disk loading & \SI{500}{N/m^2} \\
+\bottomrule
+\end{tabular}
+\caption{Electrical and solver limits enforced in Stage 1.}
+\end{table}
+
+\section{Stage 1 Design Space}
+
+The present Stage 1 sweep is
+\begin{align}
+N_p &\in \{4,6,8,10,12,14,16\}, \\
+D &\in \{4.0,4.5,5.0,5.5,6.0,6.5,7.0,7.5,8.0,9.0,10.0\}\;\mathrm{in}, \\
+\frac{P}{D} &\in \{0.40,0.50,0.60,0.70,0.80,0.90\}, \\
+f_{\mathrm{prop}} &\in \{\texttt{high\_thrust},\texttt{balanced},\texttt{cruise}\}.
+\end{align}
+Therefore the Stage 1 discrete candidate count is
+\begin{equation}
+7 \times 11 \times 6 \times 3 = 1386.
+\end{equation}
+
+\section{Propeller Surrogate Model}
+
+\subsection{Family parameters}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Family & \(C_{T,\mathrm{static,base}}\) & \(C_{P,\mathrm{static,base}}\) & \(J_{\mathrm{crit}}\) \\
+\midrule
+\texttt{high\_thrust} & 0.165 & 0.092 & 0.55 \\
+\texttt{balanced} & 0.135 & 0.076 & 0.75 \\
+\texttt{cruise} & 0.110 & 0.064 & 0.95 \\
+\bottomrule
+\end{tabular}
+\caption{Stage 1 coarse prop-family constants.}
+\end{table}
+
+\subsection{Pitch-ratio scaling}
+
+Let
+\begin{equation}
+n = \frac{\mathrm{RPM}}{60}
+\end{equation}
+be rotational speed in revolutions per second. The advance ratio is
+\begin{equation}
+J = \frac{V}{nD}.
+\end{equation}
+With reference pitch ratio \((P/D)_{\mathrm{ref}} = 0.65\), Stage 1 defines
+\begin{align}
+C_{T,\mathrm{static}} &= C_{T,\mathrm{static,base}}
+\left(\frac{P/D}{0.65}\right)^{0.35}, \\
+C_{P,\mathrm{static}} &= C_{P,\mathrm{static,base}}
+\left(\frac{P/D}{0.65}\right)^{0.80}.
+\end{align}
+
+\subsection{Operating-point decay with advance ratio}
+
+The thrust and power factors are
+\begin{align}
+f_T(J) &= \max\left(0,\; 1 - \left(\frac{J}{J_{\mathrm{crit}}}\right)^{1.45}\right), \\
+f_P(J) &= \max\left(0.10,\; 1 - \left(\frac{J}{1.15\,J_{\mathrm{crit}}}\right)^{1.60}\right).
+\end{align}
+Thus,
+\begin{align}
+C_T &= C_{T,\mathrm{static}}\,f_T\,f_{Re}, \\
+C_P &= C_{P,\mathrm{static}}\,(0.25 + 0.75 f_P)\,f_{Re},
+\end{align}
+where \(f_{Re}\) is the blade Reynolds derating defined below.
+
+\subsection{Blade Reynolds derating}
+
+At the \(0.75R\) station, Stage 1 computes
+\begin{align}
+r_{0.75} &= 0.75 \frac{D}{2}, \\
+V_\theta &= 2\pi r_{0.75} n, \\
+V_{\mathrm{res}} &= \sqrt{V_\theta^2 + V_\infty^2}, \\
+c_{\mathrm{blade}} &= 0.10 D, \\
+Re_{\mathrm{blade}} &= \frac{\rho V_{\mathrm{res}} c_{\mathrm{blade}}}{\mu}.
+\end{align}
+The Reynolds penalty is
+\begin{equation}
+f_{Re} = \max\left(0.60,\; \min\left[1,\;
+\left(\frac{Re_{\mathrm{blade}}}{80000}\right)^{0.30}\right]\right).
+\end{equation}
+
+\subsection{Thrust, power, torque, and tip Mach}
+
+Per propeller,
+\begin{align}
+T_{\mathrm{per}} &= C_T \rho n^2 D^4, \\
+P_{\mathrm{shaft,per}} &= C_P \rho n^3 D^5.
+\end{align}
+For \(N_p\) identical propellers,
+\begin{align}
+T_{\mathrm{tot}} &= N_p T_{\mathrm{per}}, \\
+P_{\mathrm{shaft,tot}} &= N_p P_{\mathrm{shaft,per}}, \\
+P_{\mathrm{elec,tot}} &= \frac{P_{\mathrm{shaft,tot}}}{\eta_{\mathrm{chain}}} + P_{\mathrm{av}}.
+\end{align}
+Per-prop torque is
+\begin{equation}
+\tau_{\mathrm{per}} = \frac{P_{\mathrm{shaft,per}}}{2\pi n}.
+\end{equation}
+Tip speed and tip Mach are
+\begin{align}
+V_{\mathrm{tip}} &= \sqrt{(\pi D n)^2 + V_\infty^2}, \\
+M_{\mathrm{tip}} &= \frac{V_{\mathrm{tip}}}{a}.
+\end{align}
+
+\section{Packing and Blown Span Fraction}
+
+Only even propeller counts are allowed. For each half-wing, the first and last prop centers must satisfy the fuselage and tip constraints. If the required center-to-center packing distance exceeds the available half-span, the candidate is rejected.
+
+For a given placed layout, the blown span fraction is formed by unioning the spanwise slipstream intervals. Each prop creates a blown span interval of width
+\begin{equation}
+w_{\mathrm{blown}} = k_{\mathrm{exp}} D,
+\end{equation}
+with \(k_{\mathrm{exp}} = 0.8\). Overlapping intervals are merged, and then
+\begin{equation}
+\eta_b = \frac{\text{merged blown span}}{b}.
+\end{equation}
+
+\section{Slipstream Velocity Model}
+
+The total disk area is
+\begin{equation}
+A_{\mathrm{disk}} = N_p \pi \left(\frac{D}{2}\right)^2.
+\end{equation}
+Stage 1 uses an ideal actuator-disk relation:
+\begin{align}
+v_i &= \sqrt{\frac{T_{\mathrm{tot}}}{2 \rho A_{\mathrm{disk}}}}, \\
+V_{\mathrm{eff}} &= V_\infty + 2 v_i.
+\end{align}
+The inverse form is used when the code needs the thrust required to generate a target blown velocity \(V_{\mathrm{eff,req}}\):
+\begin{equation}
+T_{\mathrm{req}}(V_{\mathrm{eff,req}})
+=
+2\rho A_{\mathrm{disk}}
+\left(
+\frac{V_{\mathrm{eff,req}} - V_\infty}{2}
+\right)^2.
+\end{equation}
+
+\section{Low-Speed Two-Zone Blown-Wing Model}
+
+\subsection{Area partition}
+
+At low speed, the wing is partitioned into
+\begin{align}
+S_u &= (1-\eta_b)S, \\
+S_b &= \eta_b S.
+\end{align}
+The corresponding dynamic pressures are
+\begin{align}
+q_\infty &= \frac{1}{2}\rho V_{\infty,\mathrm{low}}^2, \\
+q_b &= \frac{1}{2}\rho V_{\mathrm{eff}}^2.
+\end{align}
+
+\subsection{Momentum-coefficient lift augmentation}
+
+Stage 1 defines a wing-reference momentum coefficient
+\begin{equation}
+C_\mu = \frac{T_{\mathrm{tot}}}{q_\infty S}.
+\end{equation}
+The blown-section lift increment is
+\begin{equation}
+\Delta C_{L,\mu} =
+\begin{cases}
+0, & C_\mu < 0.02, \\
+1.8 \sqrt{C_\mu}, & C_\mu \ge 0.02.
+\end{cases}
+\end{equation}
+The section ceilings are then
+\begin{align}
+C_{L,\max,b} &= \min\left(C_{L,\max,\mathrm{flapped}} + \Delta C_{L,\mu},\; C_{L,\mathrm{ceil}}\right), \\
+C_{L,\max,u} &= \min\left(C_{L,\max,\mathrm{flapped}},\; C_{L,\mathrm{ceil}}\right).
+\end{align}
+Since \(C_{L,\mathrm{ceil}}=2.0\), both blown and unblown sections are capped at \(2.0\) in the current implementation.
+
+\subsection{Lift partition and required blown velocity}
+
+The Stage 1 reference lift coefficient requirement is
+\begin{equation}
+C_{L,\mathrm{req,ref}} = \frac{W}{q_\infty S},
+\qquad
+W = m_{\mathrm{gross}} g.
+\end{equation}
+The unblown portion can support at most
+\begin{equation}
+L_{u,\max} = q_\infty S_u C_{L,\max,u}.
+\end{equation}
+The remaining required lift is
+\begin{equation}
+L_{\mathrm{rem}} = W - L_{u,\max}.
+\end{equation}
+If \(L_{\mathrm{rem}} \le 0\), then
+\begin{equation}
+V_{\mathrm{eff,req}} = V_{\infty,\mathrm{low}}.
+\end{equation}
+Otherwise,
+\begin{align}
+q_{b,\mathrm{req}} &= \frac{L_{\mathrm{rem}}}{S_b C_{L,\max,b}}, \\
+V_{\mathrm{eff,req}} &= \sqrt{\frac{2 q_{b,\mathrm{req}}}{\rho}},
+\end{align}
+with \(V_{\mathrm{eff,req}} \ge V_{\infty,\mathrm{low}}\).
+
+\subsection{Low-speed section lift requirements}
+
+If \(L_{\mathrm{rem}} \le 0\), then the wing is low-speed feasible without requiring the blown section to carry load. Otherwise, the blown-section lift requirement is
+\begin{equation}
+C_{L,\mathrm{req},b} = \frac{L_{\mathrm{rem}}}{q_b S_b},
+\end{equation}
+and low-speed lift feasibility requires
+\begin{equation}
+C_{L,\mathrm{req},b} \le C_{L,\max,b}.
+\end{equation}
+
+\subsection{Low-speed drag}
+
+The induced-drag factor is
+\begin{equation}
+k = \frac{1}{\pi e AR}.
+\end{equation}
+The low-speed section drag coefficients are
+\begin{align}
+C_{D,u} &= f_{\mathrm{trim}}
+\left(
+f_{\mathrm{unblown}} C_{D0,\mathrm{flapped}} + k C_{L,u}^2
+\right), \\
+C_{D,b} &= f_{\mathrm{trim}}
+\left(
+f_{\mathrm{blown}} C_{D0,\mathrm{flapped}} + k C_{L,b}^2
+\right).
+\end{align}
+Thus the total low-speed drag is
+\begin{equation}
+D_{\mathrm{low}} = q_\infty S_u C_{D,u} + q_b S_b C_{D,b}.
+\end{equation}
+
+\section{Cruise Model}
+
+At cruise, Stage 1 uses a clean-wing drag buildup. The cruise lift coefficient requirement is
+\begin{equation}
+C_{L,\mathrm{cruise}} = \frac{W}{q_{\mathrm{cruise}} S},
+\qquad
+q_{\mathrm{cruise}} = \frac{1}{2}\rho V_{\infty,\mathrm{cruise}}^2.
+\end{equation}
+The cruise drag coefficient is
+\begin{equation}
+C_{D,\mathrm{cruise}} = C_{D0,\mathrm{clean}} + k C_{L,\mathrm{cruise}}^2,
+\end{equation}
+and cruise drag is
+\begin{equation}
+D_{\mathrm{cruise}} = q_{\mathrm{cruise}} S C_{D,\mathrm{cruise}}.
+\end{equation}
+Cruise lift feasibility requires
+\begin{equation}
+C_{L,\mathrm{cruise}} \le C_{L,\max,\mathrm{clean}}.
+\end{equation}
+
+\section{Operating-Point Solve}
+
+\subsection{Low-speed RPM solve}
+
+Stage 1 solves the minimum low-speed RPM that satisfies both the drag requirement and the blown-velocity requirement. The low-speed thrust requirement is
+\begin{equation}
+T_{\mathrm{req,low}} =
+\max\left(
+\gamma_{\mathrm{low}} D_{\mathrm{low}},\;
+T_{\mathrm{req}}(V_{\mathrm{eff,req}})
+\right).
+\end{equation}
+The low-speed residual is
+\begin{equation}
+R_{\mathrm{low}}(\mathrm{RPM}) =
+T_{\mathrm{tot}}(\mathrm{RPM}) - T_{\mathrm{req,low}}.
+\end{equation}
+Stage 1 uses a bisection solve over the bracket \([4000,14000]\) rpm.
+
+\subsection{Cruise RPM solve}
+
+The cruise thrust requirement is
+\begin{equation}
+T_{\mathrm{req,cruise}} = \gamma_{\mathrm{cruise}} D_{\mathrm{cruise}},
+\end{equation}
+and the cruise residual is
+\begin{equation}
+R_{\mathrm{cruise}}(\mathrm{RPM}) =
+T_{\mathrm{tot}}(\mathrm{RPM}) - T_{\mathrm{req,cruise}}.
+\end{equation}
+This residual is solved over \([3000,11000]\) rpm.
+
+\section{Motor and Mass Inference}
+
+\subsection{Motor requirements}
+
+Stage 1 does not select a catalog motor directly. It infers motor requirements from the solved operating points:
+\begin{align}
+I_{\mathrm{motor}} &=
+\frac{\max(P_{\mathrm{elec,low}}, P_{\mathrm{elec,cruise}})}
+{V_{\mathrm{batt}} N_p}, \\
+k_V &\approx \frac{\mathrm{RPM}_{\mathrm{low}}}{0.85 V_{\mathrm{batt}}}.
+\end{align}
+
+\subsection{Propulsion mass fits}
+
+The Stage 1 propulsion-mass closure uses fitted power laws from local CSV databases:
+\begin{align}
+m_{\mathrm{prop}}[\mathrm{g}] &=
+0.10287476896145267 \;
+D_{\mathrm{in}}^{2.503890170879269}
+\left(1 + 0.014466435874827321 \frac{P}{D}\right), \\
+m_{\mathrm{motor}}[\mathrm{g}] &=
+0.39551092994895437 \;
+P_{\mathrm{shaft,peak}}^{0.8602954664135029}, \\
+m_{\mathrm{ESC}}[\mathrm{g}] &=
+0.3553247179813882 \;
+I_{\mathrm{motor}}^{1.1780662036609257}.
+\end{align}
+
+\subsection{Battery mass}
+
+The mission energy model is
+\begin{equation}
+E_{\mathrm{usable}} =
+P_{\mathrm{low}} \frac{t_{\mathrm{climb}}}{60}
++
+P_{\mathrm{cruise}} \frac{t_{\mathrm{loiter}}}{60}.
+\end{equation}
+The required pack energy and battery mass are
+\begin{align}
+E_{\mathrm{pack}} &= E_{\mathrm{usable}}(1 + f_{\mathrm{reserve}}), \\
+m_{\mathrm{battery}} &= \frac{E_{\mathrm{pack}}}{\epsilon_{\mathrm{batt}}}.
+\end{align}
+
+The total built mass is
+\begin{equation}
+m_{\mathrm{built}} = m_{\mathrm{fixed}} + m_{\mathrm{propulsion}} + m_{\mathrm{battery}},
+\end{equation}
+and Stage 1 requires
+\begin{equation}
+m_{\mathrm{built}} \le m_{\max}.
+\end{equation}
+
+\section{Feasibility Conditions}
+
+A Stage 1 candidate is feasible only if all of the following conditions are satisfied:
+\begin{align}
+\text{packing margin} &\ge 0, \\
+\text{low-speed lift feasible} &\equiv C_{L,\mathrm{req},b} \le C_{L,\max,b}, \\
+\text{cruise lift feasible} &\equiv C_{L,\mathrm{cruise}} \le C_{L,\max,\mathrm{clean}}, \\
+V_{\mathrm{eff}} - V_{\mathrm{eff,req}} &\ge 0, \\
+T_{\mathrm{tot,low}} - T_{\mathrm{req,low}} &\ge 0, \\
+T_{\mathrm{tot,cruise}} - T_{\mathrm{req,cruise}} &\ge 0, \\
+M_{\mathrm{tip,low}} &\le M_{\mathrm{tip,max}}, \\
+M_{\mathrm{tip,cruise}} &\le M_{\mathrm{tip,max}}, \\
+\mathrm{RPM}_{\mathrm{low}} - \mathrm{RPM}_{\mathrm{cruise}} &\ge 0, \\
+\left(T/A\right)_{\min} \le \frac{T_{\mathrm{tot,low}}}{A_{\mathrm{disk}}} &\le \left(T/A\right)_{\max}, \\
+m_{\mathrm{built}} &\le m_{\max}.
+\end{align}
+
+\section{Stage 1 Objective Set}
+
+Stage 1 does not collapse the design space to a single scalar objective. Instead, it computes a three-objective Pareto front:
+\begin{align}
+\min \; P_{\mathrm{low}}, \qquad
+\min \; E_{\mathrm{loiter}}, \qquad
+\min \; m_{\mathrm{propulsion}}.
+\end{align}
+The resulting nondominated set is then passed to later stages.
+
+\section{Outputs Passed Downstream}
+
+For every feasible candidate, Stage 1 records:
+\begin{itemize}[leftmargin=1.5em]
+\item solved low-speed and cruise RPM,
+\item low-speed and cruise thrust and drag,
+\item low-speed actual and required blown velocity,
+\item blown span fraction,
+\item low-speed and cruise \(C_L\) requirements,
+\item disk loading and momentum coefficient,
+\item per-prop torque and peak shaft power,
+\item inferred motor current and \(k_V\),
+\item propulsion mass, battery mass, and built-mass margin,
+\item all constraint margins.
+\end{itemize}
+
+\section{Modeling Limits}
+
+The present Stage 1 model has several intentional simplifications:
+\begin{itemize}[leftmargin=1.5em]
+\item propeller aerodynamics are surrogate-based, not yet driven by full measured UIUC \(C_T\)--\(C_P\) maps;
+\item the slipstream model is actuator-disk based and span-averaged rather than fully resolved;
+\item the low-speed wing is treated as a two-zone blown/unblown system rather than a continuously varying spanwise flowfield;
+\item Stage 1 wing geometry is fixed;
+\item structural sizing, control-surface sizing, and coupled stability analysis are deferred to later stages.
+\end{itemize}
+
+\section{Interpretation}
+
+Stage 1 should therefore be read as a concept downselection model. It answers the question:
+\emph{which distributed-propulsion architectures can plausibly satisfy the low-speed blown-lift requirement, the cruise requirement, the propulsion-mass closure, and the packing limits under a common set of conservative screening assumptions?}
+
+This is precisely the role a front-end architecture optimizer should play before higher-fidelity geometry refinement and more strongly coupled aerodynamic modeling are introduced.
+
+\end{document}

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:uav-en.tmotor.com)",
+      "WebFetch(domain:www.electricwingman.com)"
+    ]
+  }
+}
