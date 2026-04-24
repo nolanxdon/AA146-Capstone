@@ -11,7 +11,6 @@ from optimizer.core.control_surface_sizing import (
     RectangularWingControlConfig,
     _load_selected_concept,
     _pick_flap_and_aileron,
-    _prop_drop_bonus_multiplier,
     _selected_flap_section_polars,
     _total_high_lift_curve_data,
     evaluate_aileron_candidate,
@@ -146,27 +145,31 @@ def _render_geometry_plot(
     plt = runtime.plt
 
     drop_mm = [1000.0 * float(row["prop_drop_m"]) for row in rows]
-    flap_chord = [float(row["recommended_flap_chord_fraction"]) for row in rows]
-    flap_span = [float(row["recommended_flap_span_fraction"]) for row in rows]
-    bonus = [float(row["prop_drop_bonus_multiplier"]) for row in rows]
+    drop_over_c = [float(row["prop_drop_fraction_of_chord"]) for row in rows]
+    clean_immersion = [float(row["cambridge_clean_immersion_at_clmax"]) for row in rows]
+    flap_immersion = [float(row["cambridge_flap_immersion_at_clmax"]) for row in rows]
+    flap_margin_mm = [1000.0 * float(row["cambridge_flap_margin_m_at_clmax"]) for row in rows]
 
     fig, axs = plt.subplots(1, 3, figsize=(12.0, 4.3))
-    axs[0].plot(drop_mm, flap_span, marker="o", color="#f4a261")
-    axs[0].set_title("Selected Flap Span vs Prop Drop")
+    axs[0].plot(drop_mm, drop_over_c, marker="o", color="#f4a261")
+    axs[0].set_title("Motor Height in Chord Coordinates")
     axs[0].set_xlabel("Motor vertical drop [mm]")
-    axs[0].set_ylabel("Flap span fraction of semispan")
+    axs[0].set_ylabel(r"$y_p/c$")
     axs[0].grid(True, alpha=0.25)
 
-    axs[1].plot(drop_mm, flap_chord, marker="o", color="#e76f51")
-    axs[1].set_title("Selected Flap Chord vs Prop Drop")
+    axs[1].plot(drop_mm, clean_immersion, marker="o", color="#1d3557", label="Clean strip")
+    axs[1].plot(drop_mm, flap_immersion, marker="s", color="#7c3aed", label="Flap strip")
+    axs[1].set_title("Cambridge Jet Immersion at CLmax")
     axs[1].set_xlabel("Motor vertical drop [mm]")
-    axs[1].set_ylabel("Flap chord fraction")
+    axs[1].set_ylabel("Immersion factor")
     axs[1].grid(True, alpha=0.25)
+    axs[1].legend()
 
-    axs[2].plot(drop_mm, bonus, marker="o", color="#7c3aed")
-    axs[2].set_title("Prop-Drop Lift Bonus Multiplier")
+    axs[2].plot(drop_mm, flap_margin_mm, marker="o", color="#e76f51")
+    axs[2].axhline(0.0, color="#111827", linestyle="--", linewidth=1.0)
+    axs[2].set_title("Flap-Strip Jet Margin at CLmax")
     axs[2].set_xlabel("Motor vertical drop [mm]")
-    axs[2].set_ylabel("Multiplier")
+    axs[2].set_ylabel("Margin [mm]")
     axs[2].grid(True, alpha=0.25)
 
     fig.tight_layout()
@@ -186,6 +189,15 @@ def _write_summary_markdown(
 ) -> None:
     best_vstall = min(rows, key=lambda row: float(row["equivalent_vstall_mps"]))
     best_roll = max(rows, key=lambda row: float(row["roll_rate_at_nominal_degps"]))
+    peak_cl = max(float(row["equivalent_reference_clmax"]) for row in rows)
+    first_plateau = next(
+        (
+            row
+            for row in rows
+            if float(row["equivalent_reference_clmax"]) >= 0.9995 * peak_cl
+        ),
+        best_vstall,
+    )
     lines = [
         f"# Motor Height Trade Study: Rank {rank}",
         "",
@@ -193,7 +205,8 @@ def _write_summary_markdown(
         "",
         "## Key takeaways",
         "",
-        f"- Best equivalent stall speed occurred at `{1000.0 * float(best_vstall['prop_drop_m']):.0f} mm` drop: `{float(best_vstall['equivalent_vstall_mps']):.3f} m/s`.",
+        f"- Lowest equivalent stall speed in the sweep occurred at `{1000.0 * float(best_vstall['prop_drop_m']):.0f} mm` drop: `{float(best_vstall['equivalent_vstall_mps']):.3f} m/s`.",
+        f"- The lift benefit effectively saturated by about `{1000.0 * float(first_plateau['prop_drop_m']):.0f} mm` drop (`{float(first_plateau['prop_drop_fraction_of_chord']):.2f} c`), after which further lowering changed `CLmax` only negligibly.",
         f"- Highest 14 deg roll-rate estimate occurred at `{1000.0 * float(best_roll['prop_drop_m']):.0f} mm` drop: `{float(best_roll['roll_rate_at_nominal_degps']):.1f} deg/s`.",
         "",
         "## Artifacts",
@@ -202,13 +215,14 @@ def _write_summary_markdown(
         "",
         f"- Whole-wing CL overlay: ![]({output.overlay_plot.name})",
         "",
-        f"- Geometry/bonus plot: ![]({output.geometry_plot.name})",
+        f"- Geometry/immersion plot: ![]({output.geometry_plot.name})",
         "",
         "## Notes",
         "",
         "- This trade keeps the selected propulsion architecture and the selected rectangular slotted-flap/aileron geometry fixed while sweeping only motor vertical drop.",
-        "- The vertical-drop effect enters through the heuristic prop-drop lift bonus used on the blown flap section. The bonus peaks near the baseline drop and fades when the motor is too high or too low.",
-        "- These results are concept-level sensitivity trends, not a CFD-calibrated vertical-placement optimum.",
+        "- The vertical-drop effect now enters through a Cambridge-style jet-immersion criterion rather than through a purely empirical bonus term.",
+        "- The blown benefit remains strong only while the wing stays submerged in the uniform 2D jet; once the jet rides above the wing, the effective blown contribution collapses rapidly.",
+        "- These results remain concept-level sensitivity trends, not a CFD-calibrated vertical-placement optimum.",
     ]
     output.summary_md.parent.mkdir(parents=True, exist_ok=True)
     output.summary_md.write_text("\n".join(lines), encoding="utf-8")
@@ -218,7 +232,7 @@ def run_motor_height_trade(
     *,
     rank: int = 6,
     blade_count_metadata: int = 3,
-    prop_drop_fraction_values: tuple[float, ...] = (0.00, 0.04, 0.08, 0.12, 0.16, 0.20, 0.24),
+    prop_drop_fraction_of_chord_values: tuple[float, ...] = (0.00, 0.04, 0.08, 0.12, 0.16, 0.20, 0.24),
     output_root: Path = Path("outputs/motor_height_trade"),
 ) -> MotorHeightTradeOutput:
     base_config = RectangularWingControlConfig(blade_count_metadata=blade_count_metadata)
@@ -248,8 +262,12 @@ def run_motor_height_trade(
         1e-9,
     )
 
-    for drop_fraction in prop_drop_fraction_values:
-        config = replace(base_config, prop_drop_fraction_of_diameter=drop_fraction)
+    for drop_fraction in prop_drop_fraction_of_chord_values:
+        config = replace(
+            base_config,
+            prop_drop_fraction_of_chord=drop_fraction,
+            prop_drop_fraction_of_diameter=None,
+        )
         flap = evaluate_flap_candidate(
             config,
             concept,
@@ -268,11 +286,12 @@ def run_motor_height_trade(
             raise ValueError("Baseline aileron geometry became infeasible during the motor-height trade sweep.")
         polars = _selected_flap_section_polars(config, concept, flap)
         total_curve_rows = _total_high_lift_curve_data(config, concept, flap, polars)
-        drop_m = drop_fraction * concept.prop_diameter_m
+        drop_m = flap.prop_drop_m
         for row in total_curve_rows:
             overlay_rows.append(
                 {
-                    "prop_drop_fraction_of_diameter": drop_fraction,
+                    "prop_drop_fraction_of_chord": drop_fraction,
+                    "prop_drop_fraction_of_diameter": drop_m / max(concept.prop_diameter_m, 1e-9),
                     "prop_drop_m": drop_m,
                     **row,
                 }
@@ -296,12 +315,15 @@ def run_motor_height_trade(
                 "prop_pitch_ratio": concept.prop_pitch_ratio,
                 "prop_family": concept.prop_family,
                 "blade_count_metadata": concept.blade_count_metadata,
-                "prop_drop_fraction_of_diameter": drop_fraction,
+                "prop_drop_fraction_of_chord": drop_fraction,
+                "prop_drop_fraction_of_diameter": drop_m / max(concept.prop_diameter_m, 1e-9),
                 "prop_drop_m": drop_m,
-                "prop_drop_bonus_multiplier": _prop_drop_bonus_multiplier(config),
                 "recommended_flap_span_fraction": flap.flap_span_fraction,
                 "recommended_flap_chord_fraction": flap.flap_chord_fraction,
                 "recommended_flap_deflection_deg": flap.flap_deflection_deg,
+                "cambridge_clean_immersion_at_clmax": flap.cambridge_clean_immersion_at_clmax,
+                "cambridge_flap_immersion_at_clmax": flap.cambridge_flap_immersion_at_clmax,
+                "cambridge_flap_margin_m_at_clmax": flap.cambridge_flap_margin_m_at_clmax,
                 "recommended_aileron_span_fraction": aileron.aileron_span_fraction,
                 "recommended_aileron_chord_fraction": aileron.aileron_chord_fraction,
                 "equivalent_reference_clmax": flap.equivalent_reference_clmax,
