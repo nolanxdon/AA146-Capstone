@@ -14,6 +14,7 @@ PARETO_CSV = Path("outputs/stage1_pareto_front.csv")
 STAGE2_CSV = Path("outputs/stage2_prop_span_report.csv")
 STAGE3_QUEUE_CSV = Path("outputs/stage3_aerosandbox_queue.csv")
 STAGE3_RESULTS_CSV = Path("outputs/stage3_aerosandbox_results.csv")
+MOTOR_TARGET_ROOT = Path("outputs/motor_targeting")
 
 
 def _load_rows(path: Path) -> list[dict[str, str]]:
@@ -132,6 +133,26 @@ def validate_outputs(
         for field in ["top_view_png", "three_view_png", "wireframe_png", "polar_png", "mesh_npz"]:
             if not Path(row[field]).exists():
                 issues.append(f"Stage 3 row {idx} is missing artifact {row[field]}.")
+
+    if MOTOR_TARGET_ROOT.exists():
+        for run_dir in sorted(path for path in MOTOR_TARGET_ROOT.iterdir() if path.is_dir()):
+            summary_csv = run_dir / "motor_target_summary.csv"
+            summary_md = run_dir / "motor_target_summary.md"
+            candidate_csv = run_dir / "motor_target_candidates.csv"
+            operating_plot = run_dir / "motor_target_operating_points.png"
+
+            for path in [summary_csv, summary_md, candidate_csv, operating_plot]:
+                if not path.exists():
+                    issues.append(f"Motor targeting output is missing artifact {path}.")
+
+            summary_rows = _load_rows(summary_csv)
+            candidate_rows = _load_rows(candidate_csv)
+            if len(summary_rows) != 1:
+                issues.append(
+                    f"Motor targeting summary in {run_dir} should contain exactly one row, found {len(summary_rows)}."
+                )
+            if not candidate_rows:
+                issues.append(f"Motor targeting candidates in {run_dir} are empty.")
 
     return issues
 

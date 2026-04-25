@@ -1,12 +1,23 @@
 # Motor Height Trade Study: Rank 6
 
 - Prop concept: `10 x 5.5 x 2.2 in`
+- Scenarios compared:
+  - `clean_blowing`: clean blown wing with no flap deployed
+  - `slotted_flap_blowing`: slotted flap plus blowing
 
 ## Key takeaways
 
-- Lowest equivalent stall speed in the sweep occurred at `84 mm` drop: `4.365 m/s`.
-- The lift benefit effectively saturated by about `28 mm` drop (`0.08 c`), after which further lowering changed `CLmax` only negligibly.
-- Highest 14 deg roll-rate estimate occurred at `0 mm` drop: `30.9 deg/s`.
+### Clean blown wing
+
+- Lowest equivalent stall speed in the sweep occurred at `42 mm` drop: `4.422 m/s`.
+- `CLmax` effectively saturated by about `28 mm` drop (`0.08 c`).
+- The strongest modeled post-stall harshness occurred at `84 mm` drop with `poststall_drop_5deg = 4.569`.
+
+### Slotted flap + blowing
+
+- Lowest equivalent stall speed in the sweep occurred at `42 mm` drop: `4.365 m/s`.
+- `CLmax` effectively saturated by about `28 mm` drop (`0.08 c`).
+- The strongest modeled post-stall harshness occurred at `84 mm` drop with `poststall_drop_5deg = 4.202`.
 
 ## Artifacts
 
@@ -14,11 +25,11 @@
 
 - Whole-wing CL overlay: ![](motor_height_trade_cl_overlay.png)
 
-- Geometry/immersion plot: ![](motor_height_trade_geometry.png)
+- Geometry/penalty plot: ![](motor_height_trade_geometry.png)
 
 ## Notes
 
-- This trade keeps the selected propulsion architecture and the selected rectangular slotted-flap/aileron geometry fixed while sweeping only motor vertical drop.
-- The vertical-drop effect now enters through a Cambridge-style jet-immersion criterion rather than through a purely empirical bonus term.
-- The blown benefit remains strong only while the wing stays submerged in the uniform 2D jet; once the jet rides above the wing, the effective blown contribution collapses rapidly.
-- These results remain concept-level sensitivity trends, not a CFD-calibrated vertical-placement optimum.
+- The selected propulsion architecture, flap geometry, and aileron geometry are held fixed while sweeping only motor vertical drop.
+- The trade now combines two mechanisms: Cambridge-style jet immersion and a bounded over-drop penalty that only becomes significant near stall.
+- The clean-wing and slotted-flap branches are evaluated separately so the motor-height sensitivity of each high-lift system can be compared directly.
+- The over-drop penalty is still a concept-level surrogate; it is intended to reproduce the qualitative MIT-style trend that excessive drop can sharpen stall, not to claim an experimentally calibrated absolute optimum.

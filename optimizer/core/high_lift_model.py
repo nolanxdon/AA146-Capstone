@@ -96,6 +96,103 @@ def cambridge_uniform_jet_immersion(
     }
 
 
+def apply_overdrop_stall_penalty(
+    *,
+    alpha_deg: np.ndarray,
+    local_cl: np.ndarray,
+    local_cd: np.ndarray,
+    local_cm: np.ndarray,
+    prop_drop_m: float,
+    chord_m: float,
+    effective_velocity_mps: float,
+    freestream_velocity_mps: float,
+    flap_deflection_deg: float,
+    flap_chord_fraction: float,
+    onset_clean_fraction_of_chord: float = 0.12,
+    onset_flap_fraction_of_chord: float = 0.16,
+    reference_fraction_of_chord: float = 0.21,
+    drop_exponent: float = 1.6,
+    blowing_exponent: float = 0.8,
+    flap_relief_factor: float = 0.75,
+    peak_shift_gain_deg: float = 3.0,
+    pre_stall_cl_penalty_gain: float = 0.16,
+    poststall_decay_gain: float = 2.0,
+    poststall_width_deg: float = 4.0,
+    cd_penalty_gain: float = 0.22,
+    cm_penalty_gain: float = 0.28,
+    stall_gate_offset_deg: float = 1.5,
+    stall_gate_width_deg: float = 1.2,
+) -> dict[str, np.ndarray]:
+    """
+    Apply a bounded "motor dropped too low" penalty to a blown strip polar.
+
+    Paper basis:
+    - Hawkswell et al. motivate the immersion-side geometry scale around 0.12c
+      to 0.21c and the rapid loss of benefit when the wing leaves the jet.
+    - Agrawal et al. motivate a second mechanism in which less favorable jet
+      geometry can lead to a more abrupt stall behavior.
+
+    This helper models the second mechanism only as a calibrated surrogate:
+    - low alpha is left mostly unchanged,
+    - the apparent stall onset is shifted to a lower alpha,
+    - the post-stall drop is made steeper,
+    - drag and nose-down moment increase in the same region.
+    """
+    alpha = np.asarray(alpha_deg, dtype=float)
+    cl = np.asarray(local_cl, dtype=float)
+    cd = np.asarray(local_cd, dtype=float)
+    cm = np.asarray(local_cm, dtype=float)
+
+    flap_active = flap_deflection_deg > 1e-6 and flap_chord_fraction > 1e-6
+    onset_fraction = onset_flap_fraction_of_chord if flap_active else onset_clean_fraction_of_chord
+    h = max(float(prop_drop_m) / max(float(chord_m), 1e-9), 0.0)
+    reference_fraction = max(float(reference_fraction_of_chord), onset_fraction + 1e-6)
+
+    drop_term = max((h - onset_fraction) / max(reference_fraction - onset_fraction, 1e-9), 0.0)
+    blowing_ratio = max(float(effective_velocity_mps) / max(float(freestream_velocity_mps), 1e-9), 1.0)
+    blowing_term = max(blowing_ratio - 1.0, 0.0)
+    severity_scalar = drop_term**float(drop_exponent) * blowing_term**float(blowing_exponent)
+    if flap_active:
+        severity_scalar *= float(flap_relief_factor)
+    severity_scalar = severity_scalar / (1.0 + severity_scalar)
+
+    peak_idx = int(np.argmax(cl))
+    alpha_peak_deg = float(alpha[peak_idx])
+    alpha_gate_center = alpha_peak_deg - float(stall_gate_offset_deg)
+    stall_gate = 1.0 / (1.0 + np.exp(-(alpha - alpha_gate_center) / max(float(stall_gate_width_deg), 1e-6)))
+
+    peak_shift_deg = float(peak_shift_gain_deg) * severity_scalar
+    alpha_effective = alpha + peak_shift_deg * stall_gate
+    cl_shifted = np.interp(alpha_effective, alpha, cl, left=float(cl[0]), right=float(cl[-1]))
+    cd_shifted = np.interp(alpha_effective, alpha, cd, left=float(cd[0]), right=float(cd[-1]))
+    cm_shifted = np.interp(alpha_effective, alpha, cm, left=float(cm[0]), right=float(cm[-1]))
+
+    shifted_peak_deg = alpha_peak_deg - peak_shift_deg
+    poststall_gate = np.clip((alpha - shifted_peak_deg) / max(float(poststall_width_deg), 1e-6), 0.0, None)
+
+    cl_penalty_factor = 1.0 - float(pre_stall_cl_penalty_gain) * severity_scalar * stall_gate
+    cl_penalty_factor = np.clip(cl_penalty_factor, 0.55, 1.0)
+    adjusted_cl = cl_shifted * cl_penalty_factor
+    adjusted_cl *= np.exp(-float(poststall_decay_gain) * severity_scalar * poststall_gate)
+
+    adjusted_cd = cd_shifted * (
+        1.0 + float(cd_penalty_gain) * severity_scalar * (0.35 * stall_gate + poststall_gate)
+    )
+    adjusted_cm = cm_shifted - float(cm_penalty_gain) * severity_scalar * (0.40 * stall_gate + poststall_gate)
+
+    return {
+        "adjusted_cl": adjusted_cl,
+        "adjusted_cd": adjusted_cd,
+        "adjusted_cm": adjusted_cm,
+        "severity_scalar": np.full_like(alpha, severity_scalar, dtype=float),
+        "peak_shift_deg": np.full_like(alpha, peak_shift_deg, dtype=float),
+        "alpha_peak_deg": np.full_like(alpha, alpha_peak_deg, dtype=float),
+        "shifted_alpha_peak_deg": np.full_like(alpha, shifted_peak_deg, dtype=float),
+        "stall_gate": stall_gate,
+        "poststall_gate": poststall_gate,
+    }
+
+
 def apply_slotted_flap_high_lift_corrections(
     *,
     alpha_deg: np.ndarray,

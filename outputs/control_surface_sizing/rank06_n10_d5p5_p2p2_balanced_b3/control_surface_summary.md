@@ -36,8 +36,14 @@
 - Common-alpha freestream-referenced wing CLmax: `6.003`
 - Equivalent stall speed: `4.365 m/s`
 - Lift margin at 4 m/s: `-16.0 %`
+- Alpha at CLmax: `13.27 deg`
+- Post-stall 90% point: `20.08 deg`
+- Post-stall drop over +5 deg: `0.234`
+- Whole-wing C_M at CLmax: `-0.898`
+- Whole-wing C_M at CLmax (blowing only): `-0.504`
 - Cambridge clean-strip immersion at CLmax: `1.000`
 - Cambridge flap-strip immersion at CLmax: `0.999`
+- Cambridge clean-strip jet margin at CLmax: `39.7 mm`
 - Cambridge flap-strip jet margin at CLmax: `25.9 mm`
 
 ## Recommended aileron
@@ -51,6 +57,13 @@
 - Roll damping derivative: `-0.4454`
 - Estimated roll rate at 14 deg: `30.9 deg/s`
 - Estimated roll rate at 20 deg: `44.2 deg/s`
+- Low-speed blown overlap over aileron span: `59%`
+- Low-speed local dynamic-pressure ratio over aileron: `8.30`
+- Low-speed effective local velocity over aileron: `11.53 m/s`
+- Low-speed rolling-moment derivative proxy: `0.014260 /deg`
+- Low-speed roll-damping proxy: `-3.5226`
+- Low-speed roll-rate proxy at 14 deg: `13.0 deg/s`
+- Low-speed roll-rate proxy at 20 deg: `18.6 deg/s`
 - Internal target roll rate for sizing: `30.0 deg/s`
 
 ## Artifacts
@@ -65,7 +78,11 @@
 
 - Whole-wing CL/CD curve: ![](total_cl_curve.png)
 
+- Whole-wing C_M curve: ![](total_cm_curve.png)
+
 - Aileron curves: ![](aileron_curves.png)
+
+- Low-speed aileron proxy curves: ![](low_speed_aileron_curves.png)
 
 ## Notes
 
@@ -76,3 +93,4 @@
 - Flap candidates are now penalized if they fail to cover at least `80%` of positive-half prop disks and `55%` of positive-half disk span.
 - The reported wing CLmax is now extracted from a common-alpha whole-wing lift curve, not from independently maximized section values.
 - The aileron sizing is evaluated at cruise trim using AeroSandbox VLM on the rectangular wing. The report uses an estimated steady roll rate based on VLM aileron effectiveness and roll-damping derivative.
+- The low-speed aileron metrics are explicitly labeled as proxies. They scale the cruise derivatives by the blown overlap of the aileron region and the low-speed dynamic-pressure ratio, rather than claiming a full blown-control CFD solution.

@@ -9,6 +9,14 @@ It currently documents the implemented **Stage 1 V2** model in:
 - [optimizer/core/mass_model.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/mass_model.py:1)
 - [optimizer/stages/stage1_screen.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/stages/stage1_screen.py:1)
 
+For the blown-wing refinements and control-surface studies discussed later in this project, this note also records which assumptions are:
+
+- `paper-derived`
+- `paper-informed`
+- `heuristic / calibration parameter`
+
+That distinction is especially important for the motor-height model.
+
 ## Scope
 
 The current optimizer is a **coarse concept screener** for distributed propulsion on a blown wing. It is intended to downselect:
@@ -141,6 +149,159 @@ The Stage 1 low-speed model treats the wing as two zones:
 - blown area
 
 with span coverage determined from the placed propeller disk intervals, not from a simple average-spacing formula.
+
+## Motor-Height Model Provenance
+
+The current rectangular-wing and motor-height studies use a low-order jet-immersion surrogate in:
+
+- [optimizer/core/high_lift_model.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/high_lift_model.py:1)
+- [optimizer/core/control_surface_sizing.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/control_surface_sizing.py:1)
+- [optimizer/core/motor_height_trade.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/motor_height_trade.py:1)
+
+The model is intentionally split into three evidence levels.
+
+### Paper-derived anchors
+
+From Hawkswell et al., the strongest directly usable geometric anchors are:
+
+- the wing must remain inside the propeller jet across the operating range, otherwise stall can occur abruptly
+- a representative ideal no-nacelle optimum near `0.21c` below the wing centerline
+- a representative practical nacelle-included optimum near `0.12c` below the wing centerline
+
+These are the only motor-height scales in the present repository that should be treated as directly paper-derived.
+
+### Paper-informed structure
+
+The present immersion model is paper-informed in the following sense:
+
+- Hawkswell et al. justify treating the blown portion as a nominally uniform 2D jet-covered strip for first-order reasoning.
+- Agrawal et al. justify treating blown flap performance as a function of `alpha`, blowing level, flap deflection, and jet-height ratio `h/c`, while also noting that propulsor position and motor-axis angle affect the real flow even when they are not in the simple theory.
+- Agrawal et al. also show that the more aggressive motor-axis-angle case can stall more suddenly, which motivates the present “over-drop” or “unfavorable jet geometry” penalty in the surrogate.
+
+So the current motor-height structure is:
+
+- `paper-informed` for the existence of an immersion threshold
+- `paper-informed` for the expectation that flap and no-flap cases should not share identical sensitivity
+- not yet paper-calibrated for exact constants
+- `paper-informed` for the existence of a second, near-stall penalty once motor drop becomes excessive
+
+### Heuristic / calibration parameters
+
+The current constants used in the low-order immersion model,
+
+$$
+\beta_0 = 0.08,\qquad
+\beta_\alpha = 0.55,\qquad
+\beta_f = 0.18,\qquad
+\ell_\chi = 0.02c
+$$
+
+should be treated as heuristic surrogate parameters, not as paper-derived values.
+
+Their role is:
+
+- `\beta_0`: baseline streamline-height offset
+- `\beta_\alpha`: alpha sensitivity of the required jet submergence
+- `\beta_f`: additional submergence required by flap deflection and flap chord
+- `\ell_\chi`: smoothing width of the immersion transition
+
+These constants were chosen to produce reasonable concept-level trends around the paper-derived motor-height scales above. They are placeholders until a formal calibration is performed.
+
+The current over-drop penalty also uses heuristic calibration parameters:
+
+$$
+h_{on,c} = 0.12c,\qquad
+h_{on,f} = 0.16c,\qquad
+h_{ref} = 0.21c,
+$$
+
+$$
+p = 1.6,\qquad
+q = 0.8,\qquad
+K_{\alpha} = 3.0^\circ.
+$$
+
+Their interpretation is:
+
+- `h_{on,c}`: clean-wing onset of the “too low” penalty, initialized at the practical Hawkswell motor-height scale
+- `h_{on,f}`: slotted-flap onset of the “too low” penalty, initialized above the practical scale but below the idealized scale
+- `h_{ref}`: normalization scale for excessive drop, aligned with the idealized Hawkswell height
+- `p, q`: shape exponents controlling how strongly the penalty grows with drop and blowing strength
+- `K_{\alpha}`: amount by which the apparent peak-lift alpha is shifted left as the penalty grows
+
+These are not paper-derived constants. They are initial calibration values chosen so the clean and flapped branches both show the intended qualitative trend: improvement with increased jet coverage, then degradation once the propulsor geometry becomes too aggressive.
+
+## Recommended Calibration Workflow For Motor Height
+
+The repository should treat the current motor-height constants as an intermediate surrogate and calibrate them in two stages.
+
+### Stage A: Immersion calibration from Hawkswell
+
+Use Hawkswell et al. to anchor the immersion-side geometry:
+
+- maintain the condition that the wing should remain submerged in the jet
+- retain the practical placement scale near `0.12c`
+- retain the idealized no-nacelle placement scale near `0.21c`
+
+Calibration target:
+
+- as motor height increases from too high to moderately below the wing, the model should show the expected rise in usable blown-wing lift due to improved jet coverage
+
+### Stage B: Stall-shape calibration from Agrawal
+
+Use Agrawal et al. to anchor the post-stall and aggressive-stall behavior:
+
+- preserve the section-level dependence on `alpha`, `\Delta c_J`, `\delta_f`, and `h/c`
+- use the observed difference between motor-axis-angle cases as qualitative evidence that unfavorable jet geometry can produce more abrupt stall
+
+Calibration target:
+
+- clean blown wing and flapped blown wing should both show:
+  - lift improvement as jet placement becomes favorable
+  - a peak or plateau
+  - then a sharper post-stall deterioration for overly aggressive geometry
+
+This second stage is now implemented as a bounded engineering surrogate in the current repository, but it is still only qualitatively calibrated.
+
+## Current Over-Drop Stall Penalty
+
+In addition to the Cambridge-style immersion factor, the current code applies a second penalty when the motor is dropped excessively far below the wing. This is intended to represent the Agrawal-style observation that unfavorable jet geometry can sharpen stall even when the wing is still nominally immersed in the jet.
+
+Define the motor height ratio
+
+$$
+h = \frac{\Delta z_p}{c}
+$$
+
+and the blowing-strength ratio
+
+$$
+r_V = \frac{V_{eff}}{V_\infty}.
+$$
+
+The current severity surrogate is
+
+$$
+S_{od}
+=
+\frac{
+\left[\max\left(0,\frac{h-h_{on}}{h_{ref}-h_{on}}\right)\right]^p
+\left[\max(0,r_V-1)\right]^q
+}{
+1 +
+\left[\max\left(0,\frac{h-h_{on}}{h_{ref}-h_{on}}\right)\right]^p
+\left[\max(0,r_V-1)\right]^q
+}.
+$$
+
+Then the blown-strip polar is modified so that:
+
+- low-alpha behavior is changed only weakly
+- the apparent stall onset shifts to lower alpha
+- the post-stall drop becomes steeper
+- drag and nose-down moment both increase in the same region
+
+This is not a CFD model of the lower-surface pressure field. It is a bounded surrogate chosen to reproduce the qualitative trend that the clean blown wing becomes sensitive to excessive drop earlier than the slotted-flap blown wing.
 
 ## Blown-Lift Model
 
@@ -816,6 +977,71 @@ Stage 3 writes:
 - `outputs/stage3_aerosandbox_top_designs.csv`
 - `outputs/stage3_visuals/` with planform, three-view, wireframe, polar, mesh, and trade-space artifacts
 
+## Rectangular-Wing Control-Surface Sizing
+
+The current rectangular-wing sizing workflow is implemented in:
+
+- [optimizer/core/control_surface_sizing.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/control_surface_sizing.py:1)
+- [optimizer/stages/control_surface_sizing.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/stages/control_surface_sizing.py:1)
+
+For a selected Stage 3 rank, the workflow:
+
+- freezes the wing to a rectangular planform with fixed span and chord
+- sizes an inboard single-slotted flap while enforcing overlap with the inboard propeller array
+- sizes an outboard aileron with both cruise and low-speed blown-wing authority proxies
+- assembles whole-wing common-\(\alpha\) curves for:
+  - \(C_L(\alpha)\)
+  - \(C_M(\alpha)\)
+
+The low-speed aileron proxy is intentionally simple. It is not a fully coupled roll-dynamics solution. Instead, it scales the cruise aileron geometry by:
+
+- the fraction of the aileron span overlapped by the blown intervals
+- the local blown dynamic-pressure ratio on that span
+- a roll-damping proxy already used in the rectangular-wing sizing workflow
+
+The current outputs now include:
+
+- `total_cl_curve.png`
+- `total_cm_curve.png`
+- `low_speed_aileron_curves.png`
+- `control_surface_summary.csv`
+- `control_surface_summary.md`
+
+The key wing-only control-surface metrics written to the summary file are:
+
+- equivalent whole-wing \(C_{L,\max}\)
+- equivalent stall speed
+- alpha at \(C_{L,\max}\)
+- post-stall drop metric over the next \(5^\circ\)
+- whole-wing \(C_M\) at the peak high-lift point
+- blown-overlap fraction on the aileron span
+- low-speed aileron roll-rate proxy
+
+These should be interpreted as concept-level wing metrics, not as final aircraft handling-quality predictions.
+
+## Representative Motor Targeting
+
+The repository now includes a representative motor-target sheet generator in:
+
+- [optimizer/core/motor_targeting.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/core/motor_targeting.py:1)
+- [optimizer/stages/motor_targeting.py](/Users/nolannguyen/Documents/GitHub/AA146-Capstone/optimizer/stages/motor_targeting.py:1)
+
+This stage does not yet select a final catalog motor. Instead, it converts the downselected propeller operating point into a procurement-style target band:
+
+- required low-speed and cruise RPM
+- per-motor torque and shaft power
+- required Kv
+- target Kv band
+- required and target electrical current
+- representative motor and ESC classes from the local sizing datasets
+
+The representative motor class search is currently based on local datasets in:
+
+- `data/motors/motor_mass.csv`
+- `data/motors/esc_mass.csv`
+
+and should therefore be interpreted as a class match, not a final hardware recommendation. A live vendor-backed downselection remains future work.
+
 ## Known Limitations
 
 The current Stage 1 / Stage 3 stack is still approximate:
@@ -825,6 +1051,8 @@ The current Stage 1 / Stage 3 stack is still approximate:
 - no full spanwise prop-slipstream interaction model is used yet inside AeroSandbox
 - Stage 3 optimizes around a weighted proxy objective rather than a full mission optimization
 - low-speed blowing is enforced through required-\(V_{\mathrm{eff}}\) compatibility with the Stage 1 propulsor architecture, not through a fully coupled prop-wing CFD/VLM solve
+- low-speed aileron authority is still a wing-only blown-dynamic-pressure proxy, not a full lateral-directional trim solution
+- representative motor targeting is based on local class datasets and heuristics, not a live hardware database
 - no explicit structural sizing or aeroelastic model is included yet
 
 ## Update Rule

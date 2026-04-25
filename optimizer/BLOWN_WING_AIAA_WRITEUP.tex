@@ -266,6 +266,8 @@ with the current implementation using
 \beta_\alpha = 0.55,\qquad
 \beta_f = 0.18.
 \end{equation}
+These constants should not be interpreted as values fitted directly from the literature. The literature supports the structure of the model and the relevant motor-height scale, but not the exact numerical values above. In particular, Hawkswell et al. provide the strongest geometric anchors for the present study by identifying representative favourable propeller heights near \(0.21c\) for the ideal no-nacelle case and near \(0.12c\) once nacelle effects are included.\cite{Hawkswell2022} Agrawal et al. justify the dependence of blown-section behaviour on \(\alpha\), blowing level, flap deflection, and jet-height ratio \(h/c\), while also noting that propulsor position and motor-axis angle affect the real flow beyond the simple theory.\cite{Agrawal2019} The present \(\beta\)-coefficients are therefore treated as paper-informed surrogate parameters to be calibrated, not as paper-derived constants.
+
 These margins are converted to immersion factors through
 \begin{equation}
 \chi(\alpha)
@@ -286,6 +288,27 @@ c_{l,fu}
 \right].
 \end{equation}
 This choice preserves the Cambridge interpretation that the jet-covered region behaves as a nominally uniform two-dimensional strip while also introducing the rapid loss of blown benefit that accompanies jet detachment from the wing.
+
+To represent the second trend suggested by Agrawal et al., namely that sufficiently aggressive jet geometry can produce a sharper stall even before the wing has fully left the jet, the present code now applies a second bounded over-drop penalty to the blown-strip polar.\cite{Agrawal2019} With
+\begin{equation}
+h = \frac{\Delta z_p}{c},
+\qquad
+r_V = \frac{V_{eff}}{V_\infty},
+\end{equation}
+the present severity surrogate is
+\begin{equation}
+S_{od}
+=
+\frac{
+\left[\max\left(0,\frac{h-h_{on}}{h_{ref}-h_{on}}\right)\right]^p
+\left[\max(0,r_V-1)\right]^q
+}{
+1+
+\left[\max\left(0,\frac{h-h_{on}}{h_{ref}-h_{on}}\right)\right]^p
+\left[\max(0,r_V-1)\right]^q
+}.
+\end{equation}
+The clean blown wing uses \(h_{on,c}=0.12\), while the slotted-flap branch uses \(h_{on,f}=0.16\); both branches use \(h_{ref}=0.21\), \(p=1.6\), and \(q=0.8\). These values are not literature-fitted constants. Rather, they are paper-informed initialization values chosen so that the clean blown wing becomes sensitive to excessive drop earlier than the slotted-flap case, in agreement with the qualitative trends of Refs.~\citenum{Hawkswell2022,Agrawal2019}. The penalty acts mainly near stall by shifting the apparent peak-lift location to lower \(\alpha\) and increasing the post-stall decay rate, while leaving the low-\(\alpha\) portion of the curve only weakly altered.
 
 For the selected rank-6 concept, the current flap geometry produces
 \begin{equation}
@@ -361,9 +384,25 @@ The corresponding low-speed and control metrics are:
     \label{fig:aileron_curves}
 \end{figure}
 
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.92\linewidth]{total_cm_curve.png}
+    \caption{Whole-wing freestream-referenced \(C_M\) curves assembled at common \(\alpha\). The flap-and-blowing case is substantially more nose-down than the blowing-only case near the peak-lift condition, which clarifies that the current high-lift benefit is accompanied by a nontrivial wing-only trim burden.}
+    \label{fig:total_cm}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.92\linewidth]{low_speed_aileron_curves.png}
+    \caption{Low-speed aileron authority proxy for the selected rectangular wing with blowing active. The current model scales the cruise aileron geometry by the blown-overlap fraction and the local blown dynamic-pressure ratio, yielding a concept-level estimate of roll authority in the \(4\) to \(\SI{6}{m/s}\) regime.}
+    \label{fig:low_speed_aileron}
+\end{figure}
+
 \subsection{Interpretation}
 
-Three observations follow directly from Figs.~\ref{fig:section_polars}--\ref{fig:total_cl}. First, the revised section model now produces the expected ordering: the flapped-and-blown wing curve lies above the blowing-only curve, but only by a modest amount. At the peak of the present whole-wing curve, the flap contributes roughly \(\Delta C_L \approx 0.16\) beyond the blowing-only case. Second, the whole-wing result remains well below the \(\SI{4}{m/s}\) requirement. The current corrected model therefore indicates that the selected rank-6 configuration is close to, but does not yet satisfy, the target low-speed condition. Third, the section figure is still useful, but only when interpreted as a strip-level diagnostic. Figure~\ref{fig:total_cl}, not Fig.~\ref{fig:section_polars}, is the appropriate figure for aircraft-level lift assessment.
+Four observations follow directly from Figs.~\ref{fig:section_polars}--\ref{fig:low_speed_aileron}. First, the revised section model now produces the expected ordering: the flapped-and-blown wing curve lies above the blowing-only curve, but only by a modest amount. At the peak of the present whole-wing curve, the flap contributes roughly \(\Delta C_L \approx 0.16\) beyond the blowing-only case. Second, the whole-wing result remains well below the \(\SI{4}{m/s}\) requirement. The current corrected model therefore indicates that the selected rank-6 configuration is close to, but does not yet satisfy, the target low-speed condition. Third, the section figure is still useful, but only when interpreted as a strip-level diagnostic. Figure~\ref{fig:total_cl}, not Fig.~\ref{fig:section_polars}, is the appropriate figure for aircraft-level lift assessment. Fourth, the additional wing-only \(C_M\) and low-speed aileron proxies show that the present high-lift configuration carries a meaningful trim cost while still retaining nonzero roll authority in the blown low-speed regime.
+
+At the present corrected optimum, the all-high-lift branch reaches \(C_{L,\max}\approx 6.00\) at \(\alpha \approx 13.3^\circ\). At that point the wing-only pitching moment is \(C_M \approx -0.90\), compared with \(C_M \approx -0.50\) for the blowing-only branch. The current low-speed aileron proxy indicates that approximately \(59\%\) of the aileron span lies inside the blown intervals, the local dynamic-pressure ratio on the aileron is about \(8.3\), and the resulting low-speed roll-rate proxy is about \(13\ \mathrm{deg/s}\) at the nominal \(14^\circ\) aileron deflection. These values should still be interpreted as wing-only concept metrics rather than full-aircraft handling-quality predictions.
 
 \section{Motor-Height Trade Study}
 
@@ -380,35 +419,37 @@ For the selected rank-6 geometry, this corresponds to
 The current script no longer translates motor height into performance through a generic bonus factor. Instead, the same Cambridge-style jet-immersion criterion used in the wing model is applied while sweeping this chord-referenced height.
 This choice mirrors the methodology of Hawkswell et al., in which the decisive low-speed mechanism is whether the wing remains immersed in the jet.\cite{Hawkswell2022} The present trade differs from the full Cambridge configuration study in one important respect: nacelle drag is not included. The motor-height sweep reported here is therefore a wing-only high-lift sensitivity study, not a full-aircraft optimum.
 
+Two scenario branches are carried through the trade. The first is a clean blown wing with no flap deployed. The second retains the selected single-slotted flap. This split is important because the current over-drop penalty is intentionally weaker for the slotted-flap branch than for the clean branch. The model therefore asks two separate questions: how much drop is required to achieve satisfactory jet immersion, and how far can the motor be lowered before the clean and flapped high-lift systems begin to show a sharper stall penalty?
+
 \subsection{Trade results}
 
-The resulting summary shows a rapid rise in performance with increasing drop followed by a plateau once the wing is fully immersed. In the present model:
+The resulting summary no longer reduces to a simple plateau. Instead, both scenario branches now exhibit the intended three-part trend: an initial rise as immersion improves, a peak or plateau once the wing is well inside the jet, and then a renewed deterioration once the over-drop penalty becomes active. In the present model:
 \begin{itemize}
-\item at zero drop, the flap-strip immersion factor at \(C_{L,\max}\) is only about 0.78 and the whole-wing \(C_{L,\max}\) falls to approximately 5.87,
-\item by \(\Delta z_p/c=0.08\), the flap-strip immersion factor has risen to about 0.98 and the whole-wing \(C_{L,\max}\) has nearly saturated,
-\item at the present baseline \(\Delta z_p/c=0.12\), the flap-strip immersion factor is approximately 0.999 and the flap-strip jet margin at \(C_{L,\max}\) is about \SI{26}{mm},
-\item the roll-rate estimate is essentially unchanged across the sweep because the aileron geometry is held fixed and the trade acts primarily through the blown flap region,
-\item the absolute variation in \(C_{L,\max}\) across the sweep is only of order \(10^{-4}\) in the current surrogate.
+\item the clean blown wing reaches its best performance near \(\Delta z_p/c = 0.08\) to \(0.12\), with \(C_{L,\max} \approx 5.85\) and an equivalent stall speed near \SI{4.42}{m/s},
+\item the slotted-flap blown wing reaches its best performance near \(\Delta z_p/c = 0.12\), with \(C_{L,\max} \approx 6.00\) and an equivalent stall speed near \SI{4.36}{m/s},
+\item the clean blown wing begins to pay the over-drop penalty earlier: by \(\Delta z_p/c = 0.16\), its severity parameter has risen to about \(0.37\) and both \(C_{L,\max}\) and post-stall behavior have deteriorated visibly,
+\item the slotted-flap branch remains largely penalty-free through \(\Delta z_p/c = 0.16\), but begins to degrade by \(\Delta z_p/c = 0.20\), at which point the over-drop severity exceeds \(0.5\),
+\item neither branch closes the \(\SI{4}{m/s}\) aircraft-level requirement under the present assumptions.
 \end{itemize}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.92\linewidth]{motor_height_trade_metrics.png}
-    \caption{Motor-height trade metrics for the selected rank-6 concept. The lift benefit rises as the motor is moved downward and the flap strip becomes immersed in the jet, then saturates once full immersion is achieved.}
+    \caption{Motor-height trade metrics for the selected rank-6 concept. Both the clean blown wing and the slotted-flap blown wing improve as jet immersion is recovered, then deteriorate once the over-drop penalty begins to sharpen the stall.}
     \label{fig:trade_metrics}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.92\linewidth]{motor_height_trade_cl_overlay.png}
-    \caption{Overlay of whole-wing all-high-lift \(C_L\) curves for several motor-drop values. The effect of vertical offset is governed by the Cambridge-style immersion criterion rather than by a prescribed optimum-height bonus.}
+    \caption{Overlay of whole-wing \(C_L\) curves for several motor-drop values, shown separately for the clean blown wing and the slotted-flap blown wing. The higher-drop cases illustrate the second modeled mechanism: once the motor is placed too low, the post-stall decay becomes markedly steeper.}
     \label{fig:trade_overlay}
 \end{figure}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.92\linewidth]{motor_height_trade_geometry.png}
-    \caption{Motor-height quantities across the vertical-offset sweep. The flap geometry is held fixed, while the clean-strip and flap-strip immersion factors approach unity once the wing is fully submerged in the jet.}
+    \caption{Motor-height quantities across the vertical-offset sweep. The immersion factor rises rapidly toward unity as the wing moves deeper into the jet, while the bounded over-drop penalty remains inactive at moderate heights and then grows once the clean and flapped branches pass their respective onset values.}
     \label{fig:trade_geometry}
 \end{figure}
 
@@ -417,11 +458,27 @@ The resulting summary shows a rapid rise in performance with increasing drop fol
 The current trade should be interpreted as a first-order sensitivity study, not as a final geometric optimum. It provides three useful insights:
 \begin{enumerate}
 \item The code now has a structured way to compare motor height as a design variable.
-\item The baseline prop drop remains reasonable under the present assumptions because it places the wing very near full jet immersion at the peak-lift condition.
-\item In the absence of nacelle drag, the motor-height trade does not exhibit a strong interior optimum; instead it approaches a plateau once the wing is submerged in the jet.
+\item The baseline prop drop remains reasonable under the present assumptions because it places the wing very near full jet immersion while remaining below the onset of the strongest over-drop penalty.
+\item The clean blown wing is more sensitive to excessive drop than the slotted-flap branch, which is consistent with the physical expectation that the flap system can tolerate a somewhat deeper jet placement before the stall sharpens.
+\item In the absence of nacelle drag, the present motor-height trade now exhibits a shallow interior optimum rather than a pure plateau.
 \end{enumerate}
 
-The largest remaining modeling gap is that motor height does not yet alter the slipstream footprint, contraction, or swirl in a resolved flowfield sense. A higher-fidelity follow-on study should therefore replace the present immersion surrogate with a CFD-calibrated or experiment-calibrated relationship and, for full-aircraft optimization, add the nacelle-drag penalty that was central to the Cambridge configuration study.
+The largest remaining modeling gap is that motor height still does not alter the slipstream footprint, contraction, or swirl in a resolved flowfield sense, and the present over-drop penalty remains only qualitatively calibrated against the MIT trends rather than quantitatively fitted to a dedicated data set.\cite{Agrawal2019} A higher-fidelity follow-on study should therefore replace the present immersion-plus-penalty surrogate with a CFD-calibrated or experiment-calibrated relationship and, for full-aircraft optimization, add the nacelle-drag penalty that was central to the Cambridge configuration study.
+
+\section{Representative Motor Targeting}
+
+The present repository now also converts the downselected propeller operating point into a representative motor/ESC target sheet. This step should not be interpreted as a final procurement decision; rather, it is a bridge between the aerodynamic downselection and a future hardware-specific propulsion study.
+
+For the selected rank-6 concept, the current Stage~1 operating point implies approximately:
+\begin{itemize}
+\item per-motor peak shaft power \(\approx \SI{11.6}{W}\),
+\item required peak electrical power \(\approx \SI{17.1}{W}\),
+\item required peak current \(\approx \SI{1.16}{A}\),
+\item required Kv \(\approx \SI{771}{rpm/V}\),
+\item recommended Kv band \(\approx \SIrange{655}{886}{rpm/V}\).
+\end{itemize}
+
+The present repository then compares that target against representative local motor and ESC class data. For the current dataset, the closest motor class is typified by a SunnySky A2212 \(1000\ \mathrm{Kv}\) motor and the closest ESC class by a BLHeli-S \(8\ \mathrm{A}\) unit. These examples are intentionally conservative because the local class dataset is coarse and skewed toward commonly available hobby hardware. They should therefore be interpreted as class matches, not as optimized part numbers.
 
 \section{Conclusions}
 
@@ -431,7 +488,9 @@ The repository now contains a coherent path from coarse propulsion downselection
 \item For the selected rank-6 propulsion concept, the present rectangular-wing study supports a \(65\%\)-semispan single-slotted flap at \(c_f/c=0.34\) and \(\delta_f=\SI{40}{deg}\), together with a \(28\%\)-semispan aileron at \(c_a/c=0.28\).
 \item Section curves approaching \(c_l\approx 9\) do not imply whole-wing \(C_L\approx 9\); the aircraft-level result must be assembled from the blown and unblown area fractions at common \(\alpha\).
 \item After the present high-lift corrections and overlap-aware flap placement are applied, the selected rank-6 concept reaches \(C_{L,\max}\approx 6.00\) and an equivalent stall speed of \(\SI{4.36}{m/s}\), leaving a modest shortfall relative to the \(\SI{4.0}{m/s}\) target.
-\item The present motor-height trade now follows a Cambridge-style immersion criterion: lowering the motor increases lift benefit until the wing is fully immersed in the jet, after which the benefit saturates. Because nacelle drag is not yet included, the current sweep should be interpreted as a wing-only high-lift trend rather than as a full-aircraft optimum.
+\item The same wing-only study now returns additional trim and low-speed control information: at the peak high-lift point, the present flap-and-blowing configuration carries a wing-only pitching moment near \(C_M\approx -0.90\) while the low-speed aileron proxy remains near \(13\ \mathrm{deg/s}\) at nominal deflection.
+\item The present motor-height trade now combines a Cambridge-style immersion criterion with a bounded over-drop stall penalty: lowering the motor first increases lift by improving jet coverage, but sufficiently large drop eventually sharpens the stall and reduces the benefit again. Because nacelle drag is not yet included, the current sweep should still be interpreted as a wing-only high-lift trend rather than as a full-aircraft optimum.
+\item The repository now also converts the aerodynamic downselection into a representative motor/ESC target sheet. For the current rank-6 concept, the implied per-motor requirement is modest --- about \(17\ \mathrm{W}\), \(1.16\ \mathrm{A}\), and \(771\ \mathrm{rpm/V}\) --- which suggests that the aerodynamic concept can be carried into hardware downselection without demanding unusually large motors, although a live vendor-backed search remains future work.
 \end{itemize}
 
 \section*{References}

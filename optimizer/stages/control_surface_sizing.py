@@ -66,7 +66,9 @@ def main() -> None:
     print(f"  Flap section polars:     {output.flap_section_polar_plot}")
     print(f"  Total CL curve CSV:      {output.total_cl_curve_csv}")
     print(f"  Total CL curve plot:     {output.total_cl_curve_plot}")
+    print(f"  Total CM curve plot:     {output.total_cm_curve_plot}")
     print(f"  Aileron curves:          {output.aileron_curves_plot}")
+    print(f"  Low-speed aileron plot:  {output.low_speed_aileron_curves_plot}")
 
 
 if __name__ == "__main__":

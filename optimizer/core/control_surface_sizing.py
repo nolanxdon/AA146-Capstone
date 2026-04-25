@@ -10,6 +10,7 @@ import numpy as np
 
 from optimizer.core.data_models import Stage1MissionConfig
 from optimizer.core.high_lift_model import (
+    apply_overdrop_stall_penalty,
     apply_slotted_flap_high_lift_corrections,
     cambridge_uniform_jet_immersion,
     resolve_prop_drop_m,
@@ -49,6 +50,18 @@ class RectangularWingControlConfig:
     cambridge_alpha_streamline_gain: float = 0.55
     cambridge_flap_streamline_gain: float = 0.18
     cambridge_jet_softness_fraction_of_chord: float = 0.02
+    overdrop_onset_clean_fraction_of_chord: float = 0.12
+    overdrop_onset_flap_fraction_of_chord: float = 0.16
+    overdrop_reference_fraction_of_chord: float = 0.21
+    overdrop_drop_exponent: float = 1.6
+    overdrop_blowing_exponent: float = 0.8
+    overdrop_flap_relief_factor: float = 0.75
+    overdrop_peak_shift_gain_deg: float = 3.0
+    overdrop_pre_stall_cl_penalty_gain: float = 0.16
+    overdrop_poststall_decay_gain: float = 2.0
+    overdrop_poststall_width_deg: float = 4.0
+    overdrop_cd_penalty_gain: float = 0.22
+    overdrop_cm_penalty_gain: float = 0.28
     use_max_flap_deflection_for_low_speed: bool = True
     max_slotted_flap_deflection_deg: float = 40.0
     aileron_target_roll_rate_degps: float = 30.0
@@ -118,7 +131,13 @@ class FlapSizingResult:
     prop_drop_fraction_of_diameter: float
     cambridge_clean_immersion_at_clmax: float
     cambridge_flap_immersion_at_clmax: float
+    cambridge_clean_margin_m_at_clmax: float
     cambridge_flap_margin_m_at_clmax: float
+    alpha_at_clmax_deg: float
+    alpha_poststall_90pct_deg: float | None
+    poststall_drop_5deg: float
+    overdrop_clean_severity_at_clmax: float
+    overdrop_flap_severity_at_clmax: float
     score: float
 
 
@@ -129,11 +148,18 @@ class AileronSizingResult:
     aileron_start_y_m: float
     aileron_area_m2: float
     aileron_area_ratio: float
+    aileron_blown_overlap_fraction: float
+    low_speed_local_dynamic_pressure_ratio: float
+    low_speed_effective_velocity_mps: float
     cruise_trim_alpha_deg: float
     cl_delta_per_deg: float
     cl_p_hat: float
     roll_rate_at_nominal_degps: float
     roll_rate_at_max_degps: float
+    low_speed_cl_delta_per_deg_proxy: float
+    low_speed_cl_p_hat_proxy: float
+    low_speed_roll_rate_at_nominal_degps_proxy: float
+    low_speed_roll_rate_at_max_degps_proxy: float
     score: float
 
 
@@ -153,7 +179,9 @@ class ControlSurfaceSizingOutput:
     flap_section_polar_plot: Path
     total_cl_curve_csv: Path
     total_cl_curve_plot: Path
+    total_cm_curve_plot: Path
     aileron_curves_plot: Path
+    low_speed_aileron_curves_plot: Path
 
 
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
@@ -272,6 +300,32 @@ def _prop_flap_overlap_metrics(
     }
 
 
+def _aileron_blow_overlap_metrics(
+    config: RectangularWingControlConfig,
+    concept: SelectedPropConcept,
+    aileron_start_y_m: float,
+) -> dict[str, float]:
+    semispan = config.mission.span_m / 2.0
+    aileron_span_m = max(semispan - aileron_start_y_m, 0.0)
+    intervals = _positive_blow_intervals(config, concept)
+    blown_overlap_m = _interval_overlap(intervals, aileron_start_y_m, semispan)
+    blown_fraction = blown_overlap_m / max(aileron_span_m, 1e-9)
+    q_inf = 0.5 * config.mission.air_density_kgpm3 * config.mission.low_speed_mps**2
+    q_b = 0.5 * config.mission.air_density_kgpm3 * concept.low_speed_veff_mps**2
+    local_q_ratio = 1.0 + blown_fraction * (q_b / max(q_inf, 1e-9) - 1.0)
+    effective_velocity_sq = (
+        (1.0 - blown_fraction) * config.mission.low_speed_mps**2
+        + blown_fraction * concept.low_speed_veff_mps**2
+    )
+    return {
+        "aileron_span_m": aileron_span_m,
+        "blown_overlap_m": blown_overlap_m,
+        "blown_overlap_fraction": blown_fraction,
+        "local_dynamic_pressure_ratio": local_q_ratio,
+        "effective_velocity_mps": math.sqrt(max(effective_velocity_sq, 0.0)),
+    }
+
+
 def _slot_lift_gain(config: RectangularWingControlConfig, flap_chord_fraction: float, deflection_deg: float) -> float:
     chord_factor = np.clip((flap_chord_fraction - 0.20) / 0.14, 0.0, 1.0)
     deflection_factor = np.clip(deflection_deg / 35.0, 0.5, 1.15)
@@ -305,6 +359,43 @@ def _saturate_blown_section_reference(
     limited = cl_limit * math.tanh(raw_reference_value / cl_limit)
     scale = limited / raw_reference_value if abs(raw_reference_value) > 1e-9 else 1.0
     return limited, scale
+
+
+def _interp_x_for_y(x: np.ndarray, y: np.ndarray, y_target: float) -> float | None:
+    for i in range(1, len(x)):
+        y0 = y[i - 1]
+        y1 = y[i]
+        if (y0 - y_target) * (y1 - y_target) <= 0.0 and y1 != y0:
+            t = (y_target - y0) / (y1 - y0)
+            return float(x[i - 1] + t * (x[i] - x[i - 1]))
+    return None
+
+
+def _interp_y_for_x(x: np.ndarray, y: np.ndarray, x_target: float) -> float | None:
+    if x_target < x.min() or x_target > x.max():
+        return None
+    return float(np.interp(x_target, x, y))
+
+
+def _curve_peak_and_stall_metrics(alpha_deg: np.ndarray, cl_values: np.ndarray) -> dict[str, float | None]:
+    alpha = np.asarray(alpha_deg, dtype=float)
+    cl = np.asarray(cl_values, dtype=float)
+    peak_index = int(np.argmax(cl))
+    peak_cl = float(cl[peak_index])
+    alpha_at_peak = float(alpha[peak_index])
+    alpha_poststall_90pct = None
+    post_peak_alpha = alpha[peak_index:]
+    post_peak_cl = cl[peak_index:]
+    alpha_poststall_90pct = _interp_x_for_y(post_peak_alpha, post_peak_cl, 0.9 * peak_cl)
+    cl_plus_5 = _interp_y_for_x(alpha, cl, alpha_at_peak + 5.0)
+    if cl_plus_5 is None:
+        cl_plus_5 = float(cl[-1])
+    return {
+        "peak_cl": peak_cl,
+        "alpha_at_peak_deg": alpha_at_peak,
+        "alpha_poststall_90pct_deg": alpha_poststall_90pct,
+        "poststall_drop_5deg": peak_cl - cl_plus_5,
+    }
 
 
 def _flapped_section_polars(
@@ -440,6 +531,72 @@ def _cambridge_immersion_data(
     )
 
 
+def _overdrop_adjusted_blown_polars(
+    config: RectangularWingControlConfig,
+    concept: SelectedPropConcept,
+    *,
+    alpha_deg: np.ndarray,
+    flap_chord_fraction: float,
+    flap_deflection_deg: float,
+    clean_blown_cl: np.ndarray,
+    clean_blown_cd: np.ndarray,
+    clean_blown_cm: np.ndarray,
+    flap_blown_cl: np.ndarray,
+    flap_blown_cd: np.ndarray,
+    flap_blown_cm: np.ndarray,
+) -> dict[str, dict[str, np.ndarray]]:
+    prop_drop_m = _prop_drop_m(config, concept)
+    clean = apply_overdrop_stall_penalty(
+        alpha_deg=alpha_deg,
+        local_cl=clean_blown_cl,
+        local_cd=clean_blown_cd,
+        local_cm=clean_blown_cm,
+        prop_drop_m=prop_drop_m,
+        chord_m=config.mission.chord_m,
+        effective_velocity_mps=concept.low_speed_veff_mps,
+        freestream_velocity_mps=config.mission.low_speed_mps,
+        flap_deflection_deg=0.0,
+        flap_chord_fraction=0.0,
+        onset_clean_fraction_of_chord=config.overdrop_onset_clean_fraction_of_chord,
+        onset_flap_fraction_of_chord=config.overdrop_onset_flap_fraction_of_chord,
+        reference_fraction_of_chord=config.overdrop_reference_fraction_of_chord,
+        drop_exponent=config.overdrop_drop_exponent,
+        blowing_exponent=config.overdrop_blowing_exponent,
+        flap_relief_factor=config.overdrop_flap_relief_factor,
+        peak_shift_gain_deg=config.overdrop_peak_shift_gain_deg,
+        pre_stall_cl_penalty_gain=config.overdrop_pre_stall_cl_penalty_gain,
+        poststall_decay_gain=config.overdrop_poststall_decay_gain,
+        poststall_width_deg=config.overdrop_poststall_width_deg,
+        cd_penalty_gain=config.overdrop_cd_penalty_gain,
+        cm_penalty_gain=config.overdrop_cm_penalty_gain,
+    )
+    flap = apply_overdrop_stall_penalty(
+        alpha_deg=alpha_deg,
+        local_cl=flap_blown_cl,
+        local_cd=flap_blown_cd,
+        local_cm=flap_blown_cm,
+        prop_drop_m=prop_drop_m,
+        chord_m=config.mission.chord_m,
+        effective_velocity_mps=concept.low_speed_veff_mps,
+        freestream_velocity_mps=config.mission.low_speed_mps,
+        flap_deflection_deg=flap_deflection_deg,
+        flap_chord_fraction=flap_chord_fraction,
+        onset_clean_fraction_of_chord=config.overdrop_onset_clean_fraction_of_chord,
+        onset_flap_fraction_of_chord=config.overdrop_onset_flap_fraction_of_chord,
+        reference_fraction_of_chord=config.overdrop_reference_fraction_of_chord,
+        drop_exponent=config.overdrop_drop_exponent,
+        blowing_exponent=config.overdrop_blowing_exponent,
+        flap_relief_factor=config.overdrop_flap_relief_factor,
+        peak_shift_gain_deg=config.overdrop_peak_shift_gain_deg,
+        pre_stall_cl_penalty_gain=config.overdrop_pre_stall_cl_penalty_gain,
+        poststall_decay_gain=config.overdrop_poststall_decay_gain,
+        poststall_width_deg=config.overdrop_poststall_width_deg,
+        cd_penalty_gain=config.overdrop_cd_penalty_gain,
+        cm_penalty_gain=config.overdrop_cm_penalty_gain,
+    )
+    return {"clean": clean, "flap": flap}
+
+
 def _combined_high_lift_curve_data(
     config: RectangularWingControlConfig,
     concept: SelectedPropConcept,
@@ -477,19 +634,32 @@ def _combined_high_lift_curve_data(
         flap_deflection_deg,
         alphas,
     )
+    overdrop = _overdrop_adjusted_blown_polars(
+        config,
+        concept,
+        alpha_deg=alphas,
+        flap_chord_fraction=flap_chord_fraction,
+        flap_deflection_deg=flap_deflection_deg,
+        clean_blown_cl=np.asarray(polars_blown["clean_cl"], dtype=float),
+        clean_blown_cd=np.asarray(polars_blown["clean_cd"], dtype=float),
+        clean_blown_cm=np.asarray(polars_blown["clean_cm"], dtype=float),
+        flap_blown_cl=np.asarray(polars_blown["flapped_cl"], dtype=float),
+        flap_blown_cd=np.asarray(polars_blown["flapped_cd"], dtype=float),
+        flap_blown_cm=np.asarray(polars_blown["flapped_cm"], dtype=float),
+    )
     for idx, alpha_deg in enumerate(alphas):
         clean_unblown_cl = float(polars_unblown["clean_cl"][idx])
-        clean_blown_cl = float(polars_blown["clean_cl"][idx])
+        clean_blown_cl = float(overdrop["clean"]["adjusted_cl"][idx])
         flap_unblown_cl = float(polars_unblown["flapped_cl"][idx])
-        flap_blown_cl = float(polars_blown["flapped_cl"][idx])
+        flap_blown_cl = float(overdrop["flap"]["adjusted_cl"][idx])
         clean_unblown_cd = float(polars_unblown["clean_cd"][idx])
-        clean_blown_cd = float(polars_blown["clean_cd"][idx])
+        clean_blown_cd = float(overdrop["clean"]["adjusted_cd"][idx])
         flap_unblown_cd = float(polars_unblown["flapped_cd"][idx])
-        flap_blown_cd = float(polars_blown["flapped_cd"][idx])
+        flap_blown_cd = float(overdrop["flap"]["adjusted_cd"][idx])
         clean_unblown_cm = float(polars_unblown["clean_cm"][idx])
-        clean_blown_cm = float(polars_blown["clean_cm"][idx])
+        clean_blown_cm = float(overdrop["clean"]["adjusted_cm"][idx])
         flap_unblown_cm = float(polars_unblown["flapped_cm"][idx])
-        flap_blown_cm = float(polars_blown["flapped_cm"][idx])
+        flap_blown_cm = float(overdrop["flap"]["adjusted_cm"][idx])
 
         clean_immersion = float(immersion["clean_immersion_factor"][idx])
         flap_immersion = float(immersion["flap_immersion_factor"][idx])
@@ -583,6 +753,10 @@ def _combined_high_lift_curve_data(
                 "cambridge_flap_immersion_factor": flap_immersion,
                 "cambridge_clean_margin_m": float(immersion["clean_margin_m"][idx]),
                 "cambridge_flap_margin_m": float(immersion["flap_margin_m"][idx]),
+                "overdrop_clean_severity_scalar": float(overdrop["clean"]["severity_scalar"][idx]),
+                "overdrop_flap_severity_scalar": float(overdrop["flap"]["severity_scalar"][idx]),
+                "overdrop_clean_peak_shift_deg": float(overdrop["clean"]["peak_shift_deg"][idx]),
+                "overdrop_flap_peak_shift_deg": float(overdrop["flap"]["peak_shift_deg"][idx]),
             }
         )
     return rows
@@ -641,6 +815,9 @@ def evaluate_flap_candidate(
         key=lambda row: float(row["cl_all_high_lift"]),
     )
     equivalent_reference_clmax = float(clmax_row["cl_all_high_lift"])
+    alpha = np.asarray([row["alpha_deg"] for row in total_curve_rows], dtype=float)
+    cl_all = np.asarray([row["cl_all_high_lift"] for row in total_curve_rows], dtype=float)
+    curve_metrics = _curve_peak_and_stall_metrics(alpha, cl_all)
     equivalent_vstall = math.sqrt(
         max(2.0 * mission.gross_weight_n / (mission.air_density_kgpm3 * wing_area * max(equivalent_reference_clmax, 1e-9)), 0.0)
     )
@@ -691,7 +868,13 @@ def evaluate_flap_candidate(
         prop_drop_fraction_of_diameter=prop_drop_m / max(concept.prop_diameter_m, 1e-9),
         cambridge_clean_immersion_at_clmax=float(clmax_row["cambridge_clean_immersion_factor"]),
         cambridge_flap_immersion_at_clmax=float(clmax_row["cambridge_flap_immersion_factor"]),
+        cambridge_clean_margin_m_at_clmax=float(clmax_row["cambridge_clean_margin_m"]),
         cambridge_flap_margin_m_at_clmax=float(clmax_row["cambridge_flap_margin_m"]),
+        alpha_at_clmax_deg=float(curve_metrics["alpha_at_peak_deg"]),
+        alpha_poststall_90pct_deg=curve_metrics["alpha_poststall_90pct_deg"],
+        poststall_drop_5deg=float(curve_metrics["poststall_drop_5deg"]),
+        overdrop_clean_severity_at_clmax=float(clmax_row["overdrop_clean_severity_scalar"]),
+        overdrop_flap_severity_at_clmax=float(clmax_row["overdrop_flap_severity_scalar"]),
         score=score,
     )
 
@@ -846,6 +1029,7 @@ def _solve_trim_alpha(config: RectangularWingControlConfig, airplane: Any) -> tu
 
 def evaluate_aileron_candidate(
     config: RectangularWingControlConfig,
+    concept: SelectedPropConcept,
     flap: FlapSizingResult,
     aileron_span_fraction: float,
     aileron_chord_fraction: float,
@@ -909,6 +1093,24 @@ def evaluate_aileron_candidate(
     aileron_span_m = aileron_span_fraction * semispan
     aileron_area = 2.0 * mission.chord_m * aileron_span_m * aileron_chord_fraction
     aileron_area_ratio = aileron_area / mission.wing_area_m2
+    low_speed_overlap = _aileron_blow_overlap_metrics(config, concept, aileron_start_y)
+    q_inf_low = 0.5 * mission.air_density_kgpm3 * mission.low_speed_mps**2
+    q_b_low = 0.5 * mission.air_density_kgpm3 * concept.low_speed_veff_mps**2
+    wing_avg_q_ratio = 1.0 + concept.blown_span_fraction * (q_b_low / max(q_inf_low, 1e-9) - 1.0)
+    low_speed_cl_delta_proxy = cl_delta_per_deg * low_speed_overlap["local_dynamic_pressure_ratio"]
+    low_speed_cl_p_hat_proxy = cl_p_hat * wing_avg_q_ratio
+    if abs(low_speed_cl_p_hat_proxy) < 1e-9:
+        low_speed_roll_rate_nominal = 0.0
+        low_speed_roll_rate_max = 0.0
+    else:
+        p_hat_ss_nominal_low = -(low_speed_cl_delta_proxy * nominal_delta) / low_speed_cl_p_hat_proxy
+        low_speed_roll_rate_nominal = (
+            p_hat_ss_nominal_low * 2.0 * mission.low_speed_mps / mission.span_m * 57.29577951308232
+        )
+        p_hat_ss_max_low = -(low_speed_cl_delta_proxy * max(abs(deflections))) / low_speed_cl_p_hat_proxy
+        low_speed_roll_rate_max = (
+            p_hat_ss_max_low * 2.0 * mission.low_speed_mps / mission.span_m * 57.29577951308232
+        )
     target_gap = max(config.aileron_target_roll_rate_degps - roll_rate_nominal, 0.0)
     score = aileron_area_ratio + 0.0025 * target_gap
 
@@ -918,11 +1120,18 @@ def evaluate_aileron_candidate(
         aileron_start_y_m=aileron_start_y,
         aileron_area_m2=aileron_area,
         aileron_area_ratio=aileron_area_ratio,
+        aileron_blown_overlap_fraction=low_speed_overlap["blown_overlap_fraction"],
+        low_speed_local_dynamic_pressure_ratio=low_speed_overlap["local_dynamic_pressure_ratio"],
+        low_speed_effective_velocity_mps=low_speed_overlap["effective_velocity_mps"],
         cruise_trim_alpha_deg=trim_alpha_deg,
         cl_delta_per_deg=cl_delta_per_deg,
         cl_p_hat=cl_p_hat,
         roll_rate_at_nominal_degps=roll_rate_nominal,
         roll_rate_at_max_degps=roll_rate_max,
+        low_speed_cl_delta_per_deg_proxy=low_speed_cl_delta_proxy,
+        low_speed_cl_p_hat_proxy=low_speed_cl_p_hat_proxy,
+        low_speed_roll_rate_at_nominal_degps_proxy=low_speed_roll_rate_nominal,
+        low_speed_roll_rate_at_max_degps_proxy=low_speed_roll_rate_max,
         score=score,
     )
 
@@ -977,6 +1186,7 @@ def _pick_flap_and_aileron(
             for aileron_chord_fraction in config.aileron_chord_fraction_values:
                 aileron = evaluate_aileron_candidate(
                     config,
+                    concept,
                     flap,
                     aileron_span_fraction,
                     aileron_chord_fraction,
@@ -1049,6 +1259,19 @@ def _selected_flap_section_polars(
         flap.flap_deflection_deg,
         cache=cache,
     )
+    overdrop = _overdrop_adjusted_blown_polars(
+        config,
+        concept,
+        alpha_deg=np.asarray(unblown["alpha_deg"], dtype=float),
+        flap_chord_fraction=flap.flap_chord_fraction,
+        flap_deflection_deg=flap.flap_deflection_deg,
+        clean_blown_cl=np.asarray(blown["clean_cl"], dtype=float),
+        clean_blown_cd=np.asarray(blown["clean_cd"], dtype=float),
+        clean_blown_cm=np.asarray(blown["clean_cm"], dtype=float),
+        flap_blown_cl=np.asarray(blown["flapped_cl"], dtype=float),
+        flap_blown_cd=np.asarray(blown["flapped_cd"], dtype=float),
+        flap_blown_cm=np.asarray(blown["flapped_cm"], dtype=float),
+    )
     return {
         "alpha_deg": unblown["alpha_deg"],
         "clean_cl_unblown": unblown["clean_cl"],
@@ -1057,18 +1280,20 @@ def _selected_flap_section_polars(
         "flapped_cd_unblown": unblown["flapped_cd"],
         "clean_cm_unblown": unblown["clean_cm"],
         "flapped_cm_unblown": unblown["flapped_cm"],
-        "clean_cl_blown": blown["clean_cl"],
-        "flapped_cl_blown": blown["flapped_cl"],
-        "clean_cd_blown": blown["clean_cd"],
-        "flapped_cd_blown": blown["flapped_cd"],
-        "clean_cm_blown": blown["clean_cm"],
-        "flapped_cm_blown": blown["flapped_cm"],
+        "clean_cl_blown": overdrop["clean"]["adjusted_cl"],
+        "flapped_cl_blown": overdrop["flap"]["adjusted_cl"],
+        "clean_cd_blown": overdrop["clean"]["adjusted_cd"],
+        "flapped_cd_blown": overdrop["flap"]["adjusted_cd"],
+        "clean_cm_blown": overdrop["clean"]["adjusted_cm"],
+        "flapped_cm_blown": overdrop["flap"]["adjusted_cm"],
         "freestream_velocity_mps": np.asarray([mission.low_speed_mps], dtype=float),
         "blown_effective_velocity_mps": np.asarray([concept.low_speed_veff_mps], dtype=float),
         "required_effective_velocity_mps": np.asarray([concept.low_speed_required_veff_mps], dtype=float),
         "induced_velocity_mps": np.asarray([induced_velocity_mps], dtype=float),
         "re_inf": np.asarray([re_inf], dtype=float),
         "re_blown": np.asarray([re_blown], dtype=float),
+        "clean_overdrop_severity_scalar": np.asarray([float(overdrop["clean"]["severity_scalar"][0])], dtype=float),
+        "flap_overdrop_severity_scalar": np.asarray([float(overdrop["flap"]["severity_scalar"][0])], dtype=float),
     }
 
 
@@ -1164,6 +1389,7 @@ def _aileron_curve_data(
 
 def _selected_flap_aileron_sweep(
     config: RectangularWingControlConfig,
+    concept: SelectedPropConcept,
     flap: FlapSizingResult,
 ) -> list[dict[str, float]]:
     rows: list[dict[str, float]] = []
@@ -1171,6 +1397,7 @@ def _selected_flap_aileron_sweep(
         for aileron_chord_fraction in config.aileron_chord_fraction_values:
             result = evaluate_aileron_candidate(
                 config,
+                concept,
                 flap,
                 aileron_span_fraction,
                 aileron_chord_fraction,
@@ -1567,6 +1794,36 @@ def _render_total_cl_curve(
     plt.close(fig)
 
 
+def _render_total_cm_curve(
+    total_curve_rows: list[dict[str, float]],
+    output_path: Path,
+) -> None:
+    runtime = ensure_stage3_runtime()
+    plt = runtime.plt
+
+    alpha = [row["alpha_deg"] for row in total_curve_rows]
+    cm_clean = [row["cm_clean_baseline"] for row in total_curve_rows]
+    cm_flap = [row["cm_flap_only"] for row in total_curve_rows]
+    cm_blow = [row["cm_blow_only"] for row in total_curve_rows]
+    cm_all = [row["cm_all_high_lift"] for row in total_curve_rows]
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    ax.plot(alpha, cm_clean, color="#1d3557", label="Clean wing")
+    ax.plot(alpha, cm_flap, color="#e76f51", label="Flap only")
+    ax.plot(alpha, cm_blow, color="#2a9d8f", label="Blowing only")
+    ax.plot(alpha, cm_all, color="#7c3aed", linewidth=2.3, label="All high-lift active")
+    ax.axhline(0.0, color="#6b7280", linewidth=1.0)
+    ax.set_xlabel("Alpha [deg]")
+    ax.set_ylabel("Freestream-referenced wing C_M")
+    ax.set_title("Whole-Wing High-Lift C_M Curves")
+    ax.grid(True, alpha=0.25)
+    ax.legend(ncol=2, fontsize=9)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _render_aileron_curves(
     config: RectangularWingControlConfig,
     aileron_curve_rows: list[dict[str, float]],
@@ -1608,14 +1865,66 @@ def _render_aileron_curves(
     plt.close(fig)
 
 
+def _render_low_speed_aileron_curves(
+    config: RectangularWingControlConfig,
+    aileron: AileronSizingResult,
+    output_path: Path,
+) -> None:
+    runtime = ensure_stage3_runtime()
+    plt = runtime.plt
+    deflections = np.asarray(config.aileron_deflection_sweep_deg, dtype=float)
+    cl_proxy = aileron.low_speed_cl_delta_per_deg_proxy * deflections
+    if abs(aileron.low_speed_cl_p_hat_proxy) < 1e-9:
+        roll_rate_proxy = np.zeros_like(deflections)
+    else:
+        p_hat_ss = -(cl_proxy / aileron.low_speed_cl_p_hat_proxy)
+        roll_rate_proxy = p_hat_ss * 2.0 * config.mission.low_speed_mps / config.mission.span_m * 57.29577951308232
+
+    fig, axs = plt.subplots(1, 2, figsize=(11.5, 4.6))
+    axs[0].plot(deflections, cl_proxy, marker="o", color="#1d3557")
+    axs[0].axhline(0.0, color="#6b7280", linewidth=1.0)
+    axs[0].set_xlabel("Aileron deflection [deg]")
+    axs[0].set_ylabel("Proxy rolling moment coefficient Cl")
+    axs[0].set_title("Low-Speed Aileron Authority Proxy")
+    axs[0].grid(True, alpha=0.25)
+
+    axs[1].plot(deflections, roll_rate_proxy, marker="o", color="#2a9d8f")
+    axs[1].axhline(0.0, color="#6b7280", linewidth=1.0)
+    axs[1].set_xlabel("Aileron deflection [deg]")
+    axs[1].set_ylabel("Proxy steady roll rate [deg/s]")
+    axs[1].set_title("Low-Speed Roll Response Proxy")
+    axs[1].grid(True, alpha=0.25)
+
+    fig.text(
+        0.5,
+        0.985,
+        (
+            rf"$V_\infty$ = {config.mission.low_speed_mps:.2f} m/s, "
+            rf"$V_{{ail,eff}}$ = {aileron.low_speed_effective_velocity_mps:.2f} m/s, "
+            rf"$q_{{ail}}/q_\infty$ = {aileron.low_speed_local_dynamic_pressure_ratio:.2f}, "
+            rf"blown overlap = {100.0 * aileron.aileron_blown_overlap_fraction:.0f}\%"
+        ),
+        ha="center",
+        va="top",
+        fontsize=10,
+        bbox=dict(facecolor="white", edgecolor="#cbd5e1", alpha=0.92),
+    )
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.90))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _summary_row(
     config: RectangularWingControlConfig,
     concept: SelectedPropConcept,
     flap: FlapSizingResult,
     aileron: AileronSizingResult,
+    total_curve_rows: list[dict[str, float]],
     output: ControlSurfaceSizingOutput,
 ) -> dict[str, object]:
     induced_velocity_mps = 0.5 * (concept.low_speed_veff_mps - config.mission.low_speed_mps)
+    cl_peak_row = max(total_curve_rows, key=lambda row: float(row["cl_all_high_lift"]))
     return {
         "rank": concept.rank,
         "n_props": concept.n_props,
@@ -1644,26 +1953,41 @@ def _summary_row(
         "prop_drop_fraction_of_diameter": flap.prop_drop_fraction_of_diameter,
         "cambridge_clean_immersion_at_clmax": flap.cambridge_clean_immersion_at_clmax,
         "cambridge_flap_immersion_at_clmax": flap.cambridge_flap_immersion_at_clmax,
+        "cambridge_clean_margin_m_at_clmax": flap.cambridge_clean_margin_m_at_clmax,
         "cambridge_flap_margin_m_at_clmax": flap.cambridge_flap_margin_m_at_clmax,
         "equivalent_reference_clmax": flap.equivalent_reference_clmax,
         "equivalent_vstall_mps": flap.equivalent_vstall_mps,
         "low_speed_lift_margin": flap.low_speed_lift_margin,
+        "alpha_at_clmax_deg": flap.alpha_at_clmax_deg,
+        "alpha_poststall_90pct_deg": flap.alpha_poststall_90pct_deg,
+        "poststall_drop_5deg": flap.poststall_drop_5deg,
+        "cm_all_high_lift_at_clmax": cl_peak_row["cm_all_high_lift"],
+        "cm_blow_only_at_clmax": cl_peak_row["cm_blow_only"],
         "recommended_aileron_span_fraction": aileron.aileron_span_fraction,
         "recommended_aileron_start_y_m": aileron.aileron_start_y_m,
         "recommended_aileron_chord_fraction": aileron.aileron_chord_fraction,
         "aileron_area_m2": aileron.aileron_area_m2,
+        "aileron_blown_overlap_fraction": aileron.aileron_blown_overlap_fraction,
+        "low_speed_aileron_dynamic_pressure_ratio": aileron.low_speed_local_dynamic_pressure_ratio,
+        "low_speed_aileron_effective_velocity_mps": aileron.low_speed_effective_velocity_mps,
         "cruise_trim_alpha_deg": aileron.cruise_trim_alpha_deg,
         "aileron_cl_delta_per_deg": aileron.cl_delta_per_deg,
         "aileron_cl_p_hat": aileron.cl_p_hat,
         "roll_rate_at_nominal_degps": aileron.roll_rate_at_nominal_degps,
         "roll_rate_at_max_degps": aileron.roll_rate_at_max_degps,
+        "low_speed_aileron_cl_delta_per_deg_proxy": aileron.low_speed_cl_delta_per_deg_proxy,
+        "low_speed_aileron_cl_p_hat_proxy": aileron.low_speed_cl_p_hat_proxy,
+        "low_speed_roll_rate_at_nominal_degps_proxy": aileron.low_speed_roll_rate_at_nominal_degps_proxy,
+        "low_speed_roll_rate_at_max_degps_proxy": aileron.low_speed_roll_rate_at_max_degps_proxy,
         "layout_plot": str(output.layout_plot),
         "flap_heatmap_plot": str(output.flap_heatmap_plot),
         "flap_curves_plot": str(output.flap_curves_plot),
         "flap_section_polar_plot": str(output.flap_section_polar_plot),
         "total_cl_curve_csv": str(output.total_cl_curve_csv),
         "total_cl_curve_plot": str(output.total_cl_curve_plot),
+        "total_cm_curve_plot": str(output.total_cm_curve_plot),
         "aileron_curves_plot": str(output.aileron_curves_plot),
+        "low_speed_aileron_curves_plot": str(output.low_speed_aileron_curves_plot),
     }
 
 
@@ -1672,10 +1996,12 @@ def _write_summary_markdown(
     concept: SelectedPropConcept,
     flap: FlapSizingResult,
     aileron: AileronSizingResult,
+    total_curve_rows: list[dict[str, float]],
     output: ControlSurfaceSizingOutput,
 ) -> None:
     prop_drop_m = flap.prop_drop_m
     induced_velocity_mps = 0.5 * (concept.low_speed_veff_mps - config.mission.low_speed_mps)
+    cl_peak_row = max(total_curve_rows, key=lambda row: float(row["cl_all_high_lift"]))
     lines = [
         f"# Rectangular-Wing Control Surface Sizing: Rank {concept.rank}",
         "",
@@ -1715,8 +2041,14 @@ def _write_summary_markdown(
         f"- Common-alpha freestream-referenced wing CLmax: `{flap.equivalent_reference_clmax:.3f}`",
         f"- Equivalent stall speed: `{flap.equivalent_vstall_mps:.3f} m/s`",
         f"- Lift margin at 4 m/s: `{100.0 * flap.low_speed_lift_margin:.1f} %`",
+        f"- Alpha at CLmax: `{flap.alpha_at_clmax_deg:.2f} deg`",
+        f"- Post-stall 90% point: `{'' if flap.alpha_poststall_90pct_deg is None else f'{flap.alpha_poststall_90pct_deg:.2f} deg'}`",
+        f"- Post-stall drop over +5 deg: `{flap.poststall_drop_5deg:.3f}`",
+        f"- Whole-wing C_M at CLmax: `{float(cl_peak_row['cm_all_high_lift']):.3f}`",
+        f"- Whole-wing C_M at CLmax (blowing only): `{float(cl_peak_row['cm_blow_only']):.3f}`",
         f"- Cambridge clean-strip immersion at CLmax: `{flap.cambridge_clean_immersion_at_clmax:.3f}`",
         f"- Cambridge flap-strip immersion at CLmax: `{flap.cambridge_flap_immersion_at_clmax:.3f}`",
+        f"- Cambridge clean-strip jet margin at CLmax: `{1000.0 * flap.cambridge_clean_margin_m_at_clmax:.1f} mm`",
         f"- Cambridge flap-strip jet margin at CLmax: `{1000.0 * flap.cambridge_flap_margin_m_at_clmax:.1f} mm`",
         "",
         "## Recommended aileron",
@@ -1730,6 +2062,13 @@ def _write_summary_markdown(
         f"- Roll damping derivative: `{aileron.cl_p_hat:.4f}`",
         f"- Estimated roll rate at {config.aileron_nominal_deflection_deg:.0f} deg: `{aileron.roll_rate_at_nominal_degps:.1f} deg/s`",
         f"- Estimated roll rate at 20 deg: `{aileron.roll_rate_at_max_degps:.1f} deg/s`",
+        f"- Low-speed blown overlap over aileron span: `{100.0 * aileron.aileron_blown_overlap_fraction:.0f}%`",
+        f"- Low-speed local dynamic-pressure ratio over aileron: `{aileron.low_speed_local_dynamic_pressure_ratio:.2f}`",
+        f"- Low-speed effective local velocity over aileron: `{aileron.low_speed_effective_velocity_mps:.2f} m/s`",
+        f"- Low-speed rolling-moment derivative proxy: `{aileron.low_speed_cl_delta_per_deg_proxy:.6f} /deg`",
+        f"- Low-speed roll-damping proxy: `{aileron.low_speed_cl_p_hat_proxy:.4f}`",
+        f"- Low-speed roll-rate proxy at {config.aileron_nominal_deflection_deg:.0f} deg: `{aileron.low_speed_roll_rate_at_nominal_degps_proxy:.1f} deg/s`",
+        f"- Low-speed roll-rate proxy at 20 deg: `{aileron.low_speed_roll_rate_at_max_degps_proxy:.1f} deg/s`",
         f"- Internal target roll rate for sizing: `{config.aileron_target_roll_rate_degps:.1f} deg/s`",
         "",
         "## Artifacts",
@@ -1744,7 +2083,11 @@ def _write_summary_markdown(
         "",
         f"- Whole-wing CL/CD curve: ![]({output.total_cl_curve_plot.name})",
         "",
+        f"- Whole-wing C_M curve: ![]({output.total_cm_curve_plot.name})",
+        "",
         f"- Aileron curves: ![]({output.aileron_curves_plot.name})",
+        "",
+        f"- Low-speed aileron proxy curves: ![]({output.low_speed_aileron_curves_plot.name})",
         "",
         "## Notes",
         "",
@@ -1755,6 +2098,7 @@ def _write_summary_markdown(
         f"- Flap candidates are now penalized if they fail to cover at least `{100.0 * config.target_positive_prop_overlap_fraction:.0f}%` of positive-half prop disks and `{100.0 * config.target_positive_disk_overlap_fraction:.0f}%` of positive-half disk span.",
         "- The reported wing CLmax is now extracted from a common-alpha whole-wing lift curve, not from independently maximized section values.",
         "- The aileron sizing is evaluated at cruise trim using AeroSandbox VLM on the rectangular wing. The report uses an estimated steady roll rate based on VLM aileron effectiveness and roll-damping derivative.",
+        "- The low-speed aileron metrics are explicitly labeled as proxies. They scale the cruise derivatives by the blown overlap of the aileron region and the low-speed dynamic-pressure ratio, rather than claiming a full blown-control CFD solution.",
     ]
     output.summary_md.parent.mkdir(parents=True, exist_ok=True)
     output.summary_md.write_text("\n".join(lines), encoding="utf-8")
@@ -1789,14 +2133,16 @@ def run_rectangular_control_surface_sizing(
         flap_section_polar_plot=output_dir / "flap_section_polars.png",
         total_cl_curve_csv=output_dir / "total_cl_curve.csv",
         total_cl_curve_plot=output_dir / "total_cl_curve.png",
+        total_cm_curve_plot=output_dir / "total_cm_curve.png",
         aileron_curves_plot=output_dir / "aileron_curves.png",
+        low_speed_aileron_curves_plot=output_dir / "low_speed_aileron_curves.png",
     )
 
     flap_curve_rows = _flap_curve_data(config, concept, flap)
     section_polars = _selected_flap_section_polars(config, concept, flap)
     total_curve_rows = _total_high_lift_curve_data(config, concept, flap, section_polars)
     aileron_curve_rows = _aileron_curve_data(config, flap, aileron)
-    aileron_sweep_rows = _selected_flap_aileron_sweep(config, flap)
+    aileron_sweep_rows = _selected_flap_aileron_sweep(config, concept, flap)
 
     _write_csv(output.flap_sweep_csv, [asdict(result) for result in flap_candidates])
     _write_csv(output.aileron_sweep_csv, aileron_sweep_rows)
@@ -1806,9 +2152,11 @@ def run_rectangular_control_surface_sizing(
     _render_flap_curves(flap_curve_rows, output.flap_curves_plot)
     _render_flap_section_polars(section_polars, output.flap_section_polar_plot)
     _render_total_cl_curve(total_curve_rows, config, output.total_cl_curve_plot)
+    _render_total_cm_curve(total_curve_rows, output.total_cm_curve_plot)
     _render_aileron_curves(config, aileron_curve_rows, output.aileron_curves_plot)
+    _render_low_speed_aileron_curves(config, aileron, output.low_speed_aileron_curves_plot)
 
-    summary = _summary_row(config, concept, flap, aileron, output)
+    summary = _summary_row(config, concept, flap, aileron, total_curve_rows, output)
     _write_csv(output.summary_csv, [summary])
-    _write_summary_markdown(config, concept, flap, aileron, output)
+    _write_summary_markdown(config, concept, flap, aileron, total_curve_rows, output)
     return output
