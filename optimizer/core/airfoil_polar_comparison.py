@@ -50,6 +50,7 @@ class AirfoilPolarComparisonConfig:
     display_names: dict[str, str] = field(
         default_factory=lambda: {
             "s1210": "S1210",
+            "dae51": "DAE51",
             "naca2412": "NACA 2412",
             "e423": "Epler E423",
         }

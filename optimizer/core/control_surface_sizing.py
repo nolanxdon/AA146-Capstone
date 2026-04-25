@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ STAGE3_RESULTS_INPUT_CSV = Path("outputs/stage3_aerosandbox_results.csv")
 @dataclass(frozen=True)
 class RectangularWingControlConfig:
     mission: Stage1MissionConfig = Stage1MissionConfig()
+    airfoil_name: str = "s1210"
     blade_count_metadata: int = 3
     flap_gap_to_aileron_m: float = 0.06
     minimum_aileron_span_fraction: float = 0.16
@@ -182,6 +184,21 @@ class ControlSurfaceSizingOutput:
     total_cm_curve_plot: Path
     aileron_curves_plot: Path
     low_speed_aileron_curves_plot: Path
+
+
+def _slugify_airfoil(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _display_airfoil_name(name: str) -> str:
+    display_names = {
+        "s1210": "S1210",
+        "dae51": "DAE51",
+        "naca0012": "NACA 0012",
+        "naca2412": "NACA 2412",
+        "e423": "Epler E423",
+    }
+    return display_names.get(name.lower(), name)
 
 
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
@@ -413,7 +430,7 @@ def _flapped_section_polars(
     asb = runtime.asb
     alpha_min, alpha_max, alpha_count = config.alpha_grid_deg
     alphas = np.linspace(alpha_min, alpha_max, int(alpha_count))
-    airfoil = asb.Airfoil("s1210")
+    airfoil = asb.Airfoil(config.airfoil_name)
     clean = airfoil.get_aero_from_neuralfoil(alpha=alphas, Re=reynolds)
     raw_flap = airfoil.get_aero_from_neuralfoil(
         alpha=alphas,
@@ -893,7 +910,7 @@ def _build_rectangular_control_airplane(
     semispan = mission.span_m / 2.0
     aileron_start_y = semispan * (1.0 - aileron_span_fraction)
     chord = mission.chord_m
-    airfoil = asb.Airfoil("s1210")
+    airfoil = asb.Airfoil(config.airfoil_name)
 
     wing = asb.Wing(
         name="Rectangular Wing",
@@ -1273,6 +1290,7 @@ def _selected_flap_section_polars(
         flap_blown_cm=np.asarray(blown["flapped_cm"], dtype=float),
     )
     return {
+        "airfoil_name": np.asarray([config.airfoil_name], dtype=object),
         "alpha_deg": unblown["alpha_deg"],
         "clean_cl_unblown": unblown["clean_cl"],
         "flapped_cl_unblown": unblown["flapped_cl"],
@@ -1605,7 +1623,9 @@ def _render_flap_heatmap(
     colorbar.set_label("Equivalent stall speed [m/s]")
     ax.set_xlabel("Flap span fraction of semispan")
     ax.set_ylabel("Flap chord fraction")
-    ax.set_title(f"Rectangular-Wing Flap Sweep at {flap.flap_deflection_deg:.0f} deg")
+    ax.set_title(
+        f"{_display_airfoil_name(config.airfoil_name)} Rectangular-Wing Flap Sweep at {flap.flap_deflection_deg:.0f} deg"
+    )
     ax.legend(loc="upper right")
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1655,6 +1675,7 @@ def _render_flap_section_polars(polars: dict[str, np.ndarray], output_path: Path
     v_induced = float(polars["induced_velocity_mps"][0])
     re_inf = float(polars["re_inf"][0])
     re_blown = float(polars["re_blown"][0])
+    airfoil_label = _display_airfoil_name(str(polars["airfoil_name"][0]))
 
     axs[0].plot(
         polars["alpha_deg"],
@@ -1682,7 +1703,7 @@ def _render_flap_section_polars(polars: dict[str, np.ndarray], output_path: Path
     )
     axs[0].set_xlabel("Alpha [deg]")
     axs[0].set_ylabel("Section CL")
-    axs[0].set_title("Section Lift Curves Used in Flap Sizing")
+    axs[0].set_title(f"{airfoil_label} Section Lift Curves Used in Flap Sizing")
     axs[0].grid(True, alpha=0.25)
     axs[0].legend()
 
@@ -1712,7 +1733,7 @@ def _render_flap_section_polars(polars: dict[str, np.ndarray], output_path: Path
     )
     axs[1].set_xlabel("Alpha [deg]")
     axs[1].set_ylabel("Section CD")
-    axs[1].set_title("Section Drag Curves Used in Flap Sizing")
+    axs[1].set_title(f"{airfoil_label} Section Drag Curves Used in Flap Sizing")
     axs[1].grid(True, alpha=0.25)
     axs[1].legend()
 
@@ -1778,14 +1799,14 @@ def _render_total_cl_curve(
         )
     axs[0].set_xlabel("Alpha [deg]")
     axs[0].set_ylabel("Freestream-referenced wing C_L")
-    axs[0].set_title("Whole-Wing High-Lift C_L Curves")
+    axs[0].set_title(f"{_display_airfoil_name(config.airfoil_name)} Whole-Wing High-Lift C_L Curves")
     axs[0].grid(True, alpha=0.25)
     axs[0].legend(ncol=2, fontsize=9)
 
     axs[1].plot(alpha, cd_all, color="#7c3aed", linewidth=2.3)
     axs[1].set_xlabel("Alpha [deg]")
     axs[1].set_ylabel("Freestream-referenced wing C_D")
-    axs[1].set_title("All-High-Lift C_D Curve")
+    axs[1].set_title(f"{_display_airfoil_name(config.airfoil_name)} All-High-Lift C_D Curve")
     axs[1].grid(True, alpha=0.25)
 
     fig.tight_layout()
@@ -1796,6 +1817,7 @@ def _render_total_cl_curve(
 
 def _render_total_cm_curve(
     total_curve_rows: list[dict[str, float]],
+    config: RectangularWingControlConfig,
     output_path: Path,
 ) -> None:
     runtime = ensure_stage3_runtime()
@@ -1815,7 +1837,7 @@ def _render_total_cm_curve(
     ax.axhline(0.0, color="#6b7280", linewidth=1.0)
     ax.set_xlabel("Alpha [deg]")
     ax.set_ylabel("Freestream-referenced wing C_M")
-    ax.set_title("Whole-Wing High-Lift C_M Curves")
+    ax.set_title(f"{_display_airfoil_name(config.airfoil_name)} Whole-Wing High-Lift C_M Curves")
     ax.grid(True, alpha=0.25)
     ax.legend(ncol=2, fontsize=9)
     fig.tight_layout()
@@ -1926,6 +1948,7 @@ def _summary_row(
     induced_velocity_mps = 0.5 * (concept.low_speed_veff_mps - config.mission.low_speed_mps)
     cl_peak_row = max(total_curve_rows, key=lambda row: float(row["cl_all_high_lift"]))
     return {
+        "airfoil_name": _display_airfoil_name(config.airfoil_name),
         "rank": concept.rank,
         "n_props": concept.n_props,
         "prop_diameter_in": concept.prop_diameter_in,
@@ -2007,6 +2030,7 @@ def _write_summary_markdown(
         "",
         "## Selected propulsion concept",
         "",
+        f"- Wing airfoil: `{_display_airfoil_name(config.airfoil_name)}`",
         f"- Rank: `{concept.rank}`",
         f"- Prop layout: `{concept.n_props} x {concept.prop_diameter_in:.1f} x {concept.prop_pitch_in:.1f} in`",
         f"- Prop family: `{concept.prop_family}`",
@@ -2108,14 +2132,20 @@ def run_rectangular_control_surface_sizing(
     *,
     rank: int = 6,
     blade_count_metadata: int = 3,
+    airfoil_name: str = "s1210",
     output_root: Path = Path("outputs/control_surface_sizing"),
 ) -> ControlSurfaceSizingOutput:
-    config = RectangularWingControlConfig(blade_count_metadata=blade_count_metadata)
+    config = RectangularWingControlConfig(
+        blade_count_metadata=blade_count_metadata,
+        airfoil_name=airfoil_name.lower(),
+    )
     concept = _load_selected_concept(rank=rank, blade_count_metadata=blade_count_metadata)
     flap, aileron, flap_candidates, _ = _pick_flap_and_aileron(config, concept)
 
     slug = _slugify_concept(concept)
     output_dir = output_root / slug
+    if config.airfoil_name != "s1210":
+        output_dir = output_dir / _slugify_airfoil(config.airfoil_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output = ControlSurfaceSizingOutput(
@@ -2152,7 +2182,7 @@ def run_rectangular_control_surface_sizing(
     _render_flap_curves(flap_curve_rows, output.flap_curves_plot)
     _render_flap_section_polars(section_polars, output.flap_section_polar_plot)
     _render_total_cl_curve(total_curve_rows, config, output.total_cl_curve_plot)
-    _render_total_cm_curve(total_curve_rows, output.total_cm_curve_plot)
+    _render_total_cm_curve(total_curve_rows, config, output.total_cm_curve_plot)
     _render_aileron_curves(config, aileron_curve_rows, output.aileron_curves_plot)
     _render_low_speed_aileron_curves(config, aileron, output.low_speed_aileron_curves_plot)
 

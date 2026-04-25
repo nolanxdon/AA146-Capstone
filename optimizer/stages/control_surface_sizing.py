@@ -23,6 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Blade count metadata for the selected prop concept. Defaults to 3.",
     )
     parser.add_argument(
+        "--airfoil",
+        type=str,
+        default="s1210",
+        help="Airfoil name to evaluate. Defaults to s1210.",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=Path("outputs/control_surface_sizing"),
@@ -36,10 +42,12 @@ def main() -> None:
     output = run_rectangular_control_surface_sizing(
         rank=args.rank,
         blade_count_metadata=args.blade_count,
+        airfoil_name=args.airfoil,
         output_root=args.output_root,
     )
 
     print("Rectangular-wing control surface sizing")
+    print(f"  Airfoil:                 {args.airfoil}")
     print(f"  Rank:                    {output.concept.rank}")
     print(
         f"  Prop concept:            {output.concept.n_props} x "
