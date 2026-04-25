@@ -23,6 +23,7 @@ from optimizer.core.stage3_refinement import (
     load_stage1_lookup,
     parse_prop_centers,
 )
+from optimizer.core.workflow_style import FLAP_STATE_COLORS
 
 
 STAGE1_PARETO_INPUT_CSV = Path("outputs/stage1_pareto_front.csv")
@@ -199,6 +200,13 @@ def _display_airfoil_name(name: str) -> str:
         "e423": "Epler E423",
     }
     return display_names.get(name.lower(), name)
+
+
+STATE_CLEAN_COLOR = FLAP_STATE_COLORS[0.0]
+STATE_INTERMEDIATE_COLOR = FLAP_STATE_COLORS[20.0]
+STATE_FULL_COLOR = FLAP_STATE_COLORS[40.0]
+STATE_BLOW_COLOR = "#dc2626"
+STATE_MUTED_RED = "#fca5a5"
 
 
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
@@ -1458,12 +1466,12 @@ def _render_layout_plot(
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 4.8), gridspec_kw={"width_ratios": [1.55, 1.0]})
     ax = axs[0]
-    wing = patches.Rectangle((0.0, -semispan), chord, mission.span_m, facecolor="#dbe4ee", edgecolor="#1f2937", linewidth=1.2)
+    wing = patches.Rectangle((0.0, -semispan), chord, mission.span_m, facecolor="#fef2f2", edgecolor="#1f2937", linewidth=1.2)
     flap_rect_r = patches.Rectangle(
         (chord * (1.0 - flap.flap_chord_fraction), 0.0),
         chord * flap.flap_chord_fraction,
         flap.flap_end_y_m,
-        facecolor="#f4a261",
+        facecolor=STATE_FULL_COLOR,
         edgecolor="#1f2937",
         alpha=0.85,
         label="Slotted flap",
@@ -1472,7 +1480,7 @@ def _render_layout_plot(
         (chord * (1.0 - flap.flap_chord_fraction), -flap.flap_end_y_m),
         chord * flap.flap_chord_fraction,
         flap.flap_end_y_m,
-        facecolor="#f4a261",
+        facecolor=STATE_FULL_COLOR,
         edgecolor="#1f2937",
         alpha=0.85,
     )
@@ -1481,7 +1489,7 @@ def _render_layout_plot(
         (chord * (1.0 - aileron.aileron_chord_fraction), aileron.aileron_start_y_m),
         chord * aileron.aileron_chord_fraction,
         aileron_span,
-        facecolor="#457b9d",
+        facecolor=STATE_CLEAN_COLOR,
         edgecolor="#1f2937",
         alpha=0.85,
         label="Aileron",
@@ -1490,7 +1498,7 @@ def _render_layout_plot(
         (chord * (1.0 - aileron.aileron_chord_fraction), -semispan),
         chord * aileron.aileron_chord_fraction,
         aileron_span,
-        facecolor="#457b9d",
+        facecolor=STATE_CLEAN_COLOR,
         edgecolor="#1f2937",
         alpha=0.85,
     )
@@ -1506,7 +1514,7 @@ def _render_layout_plot(
             (0.15, y_center),
             prop_radius,
             facecolor="none",
-            edgecolor="#7c3aed" if is_flap_prop else "#6b7280",
+            edgecolor=STATE_BLOW_COLOR if is_flap_prop else "#6b7280",
             linestyle="--",
             linewidth=1.2,
             alpha=0.9,
@@ -1545,13 +1553,13 @@ def _render_layout_plot(
     flap_len = chord * flap.flap_chord_fraction
     flap_tip_x = flap_hinge_x + flap_len * math.cos(flap_deflection_rad)
     flap_tip_z = -flap_len * math.sin(flap_deflection_rad)
-    side.plot([flap_hinge_x, flap_tip_x], [0.0, flap_tip_z], color="#f4a261", linewidth=3.0, label="Slotted flap")
+    side.plot([flap_hinge_x, flap_tip_x], [0.0, flap_tip_z], color=STATE_FULL_COLOR, linewidth=3.0, label="Slotted flap")
     side.add_patch(
         patches.Circle(
             (0.15, -prop_drop),
             prop_radius,
             facecolor="none",
-            edgecolor="#7c3aed",
+            edgecolor=STATE_BLOW_COLOR,
             linestyle="--",
             linewidth=1.2,
             alpha=0.9,
@@ -1681,25 +1689,25 @@ def _render_flap_section_polars(polars: dict[str, np.ndarray], output_path: Path
         polars["alpha_deg"],
         polars["clean_cl_unblown"],
         label=rf"Clean @ $V_\infty$ = {v_inf:.2f} m/s",
-        color="#1d3557",
+        color=STATE_CLEAN_COLOR,
     )
     axs[0].plot(
         polars["alpha_deg"],
         polars["flapped_cl_unblown"],
         label=rf"Slotted flap @ $V_\infty$ = {v_inf:.2f} m/s",
-        color="#e76f51",
+        color=STATE_INTERMEDIATE_COLOR,
     )
     axs[0].plot(
         polars["alpha_deg"],
         polars["clean_cl_blown"],
         label=rf"Clean @ $V_{{eff}}$ = {v_eff:.2f} m/s",
-        color="#2a9d8f",
+        color=STATE_BLOW_COLOR,
     )
     axs[0].plot(
         polars["alpha_deg"],
         polars["flapped_cl_blown"],
         label=rf"Slotted flap @ $V_{{eff}}$ = {v_eff:.2f} m/s",
-        color="#7c3aed",
+        color=STATE_FULL_COLOR,
     )
     axs[0].set_xlabel("Alpha [deg]")
     axs[0].set_ylabel("Section CL")
@@ -1711,25 +1719,25 @@ def _render_flap_section_polars(polars: dict[str, np.ndarray], output_path: Path
         polars["alpha_deg"],
         polars["clean_cd_unblown"],
         label=rf"Clean @ $V_\infty$ = {v_inf:.2f} m/s",
-        color="#1d3557",
+        color=STATE_CLEAN_COLOR,
     )
     axs[1].plot(
         polars["alpha_deg"],
         polars["flapped_cd_unblown"],
         label=rf"Slotted flap @ $V_\infty$ = {v_inf:.2f} m/s",
-        color="#e76f51",
+        color=STATE_INTERMEDIATE_COLOR,
     )
     axs[1].plot(
         polars["alpha_deg"],
         polars["clean_cd_blown"],
         label=rf"Clean @ $V_{{eff}}$ = {v_eff:.2f} m/s",
-        color="#2a9d8f",
+        color=STATE_BLOW_COLOR,
     )
     axs[1].plot(
         polars["alpha_deg"],
         polars["flapped_cd_blown"],
         label=rf"Slotted flap @ $V_{{eff}}$ = {v_eff:.2f} m/s",
-        color="#7c3aed",
+        color=STATE_FULL_COLOR,
     )
     axs[1].set_xlabel("Alpha [deg]")
     axs[1].set_ylabel("Section CD")
@@ -1778,10 +1786,10 @@ def _render_total_cl_curve(
     cd_all = [row["cd_all_high_lift"] for row in total_curve_rows]
 
     fig, axs = plt.subplots(1, 2, figsize=(12.2, 4.8))
-    axs[0].plot(alpha, cl_clean, color="#1d3557", label="Clean wing")
-    axs[0].plot(alpha, cl_flap, color="#e76f51", label="Flap only")
-    axs[0].plot(alpha, cl_blow, color="#2a9d8f", label="Blowing only")
-    axs[0].plot(alpha, cl_all, color="#7c3aed", linewidth=2.3, label="All high-lift active")
+    axs[0].plot(alpha, cl_clean, color=STATE_CLEAN_COLOR, label="Clean wing")
+    axs[0].plot(alpha, cl_flap, color=STATE_INTERMEDIATE_COLOR, label="Flap only")
+    axs[0].plot(alpha, cl_blow, color=STATE_BLOW_COLOR, label="Blowing only")
+    axs[0].plot(alpha, cl_all, color=STATE_FULL_COLOR, linewidth=2.3, label="All high-lift active")
     speed_colors = plt.cm.Greys(np.linspace(0.85, 0.35, len(config.reference_velocity_lines_mps)))
     for color, speed_mps in zip(speed_colors, config.reference_velocity_lines_mps):
         cl_required = mission.gross_weight_n / max(
@@ -1803,7 +1811,7 @@ def _render_total_cl_curve(
     axs[0].grid(True, alpha=0.25)
     axs[0].legend(ncol=2, fontsize=9)
 
-    axs[1].plot(alpha, cd_all, color="#7c3aed", linewidth=2.3)
+    axs[1].plot(alpha, cd_all, color=STATE_FULL_COLOR, linewidth=2.3)
     axs[1].set_xlabel("Alpha [deg]")
     axs[1].set_ylabel("Freestream-referenced wing C_D")
     axs[1].set_title(f"{_display_airfoil_name(config.airfoil_name)} All-High-Lift C_D Curve")
@@ -1830,10 +1838,10 @@ def _render_total_cm_curve(
     cm_all = [row["cm_all_high_lift"] for row in total_curve_rows]
 
     fig, ax = plt.subplots(figsize=(7.2, 4.8))
-    ax.plot(alpha, cm_clean, color="#1d3557", label="Clean wing")
-    ax.plot(alpha, cm_flap, color="#e76f51", label="Flap only")
-    ax.plot(alpha, cm_blow, color="#2a9d8f", label="Blowing only")
-    ax.plot(alpha, cm_all, color="#7c3aed", linewidth=2.3, label="All high-lift active")
+    ax.plot(alpha, cm_clean, color=STATE_CLEAN_COLOR, label="Clean wing")
+    ax.plot(alpha, cm_flap, color=STATE_INTERMEDIATE_COLOR, label="Flap only")
+    ax.plot(alpha, cm_blow, color=STATE_BLOW_COLOR, label="Blowing only")
+    ax.plot(alpha, cm_all, color=STATE_FULL_COLOR, linewidth=2.3, label="All high-lift active")
     ax.axhline(0.0, color="#6b7280", linewidth=1.0)
     ax.set_xlabel("Alpha [deg]")
     ax.set_ylabel("Freestream-referenced wing C_M")
@@ -1859,18 +1867,18 @@ def _render_aileron_curves(
     drag = [row["drag_n"] for row in aileron_curve_rows]
 
     fig, axs = plt.subplots(1, 2, figsize=(11.5, 4.6))
-    axs[0].plot(deflections, cl_values, marker="o", color="#1d3557", label="Rolling moment coefficient Cl")
-    axs[0].plot(deflections, drag, marker="s", color="#e76f51", label="Total drag [N]")
+    axs[0].plot(deflections, cl_values, marker="o", color=STATE_CLEAN_COLOR, label="Rolling moment coefficient Cl")
+    axs[0].plot(deflections, drag, marker="s", color=STATE_INTERMEDIATE_COLOR, label="Total drag [N]")
     axs[0].axhline(0.0, color="#6b7280", linewidth=1.0)
     axs[0].set_xlabel("Aileron deflection [deg]")
     axs[0].set_title("Cruise Aileron Control Curve")
     axs[0].grid(True, alpha=0.25)
     axs[0].legend()
 
-    axs[1].plot(deflections, roll_rates, marker="o", color="#2a9d8f")
+    axs[1].plot(deflections, roll_rates, marker="o", color=STATE_BLOW_COLOR)
     axs[1].axhline(
         config.aileron_target_roll_rate_degps,
-        color="#7c3aed",
+        color=STATE_FULL_COLOR,
         linestyle="--",
         linewidth=1.0,
         label="Target roll rate",
@@ -1903,14 +1911,14 @@ def _render_low_speed_aileron_curves(
         roll_rate_proxy = p_hat_ss * 2.0 * config.mission.low_speed_mps / config.mission.span_m * 57.29577951308232
 
     fig, axs = plt.subplots(1, 2, figsize=(11.5, 4.6))
-    axs[0].plot(deflections, cl_proxy, marker="o", color="#1d3557")
+    axs[0].plot(deflections, cl_proxy, marker="o", color=STATE_CLEAN_COLOR)
     axs[0].axhline(0.0, color="#6b7280", linewidth=1.0)
     axs[0].set_xlabel("Aileron deflection [deg]")
     axs[0].set_ylabel("Proxy rolling moment coefficient Cl")
     axs[0].set_title("Low-Speed Aileron Authority Proxy")
     axs[0].grid(True, alpha=0.25)
 
-    axs[1].plot(deflections, roll_rate_proxy, marker="o", color="#2a9d8f")
+    axs[1].plot(deflections, roll_rate_proxy, marker="o", color=STATE_BLOW_COLOR)
     axs[1].axhline(0.0, color="#6b7280", linewidth=1.0)
     axs[1].set_xlabel("Aileron deflection [deg]")
     axs[1].set_ylabel("Proxy steady roll rate [deg/s]")

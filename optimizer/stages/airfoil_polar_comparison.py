@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument(
         "--airfoils",
         nargs="+",
-        default=["s1210", "naca2412", "e423"],
+        default=["s1210", "e423", "dae51", "naca0012", "naca2412"],
         help="Airfoil names recognized by AeroSandbox / NeuralFoil.",
     )
     parser.add_argument(

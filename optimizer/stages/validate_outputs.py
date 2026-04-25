@@ -15,6 +15,7 @@ STAGE2_CSV = Path("outputs/stage2_prop_span_report.csv")
 STAGE3_QUEUE_CSV = Path("outputs/stage3_aerosandbox_queue.csv")
 STAGE3_RESULTS_CSV = Path("outputs/stage3_aerosandbox_results.csv")
 MOTOR_TARGET_ROOT = Path("outputs/motor_targeting")
+WING_WORKFLOW_ROOT = Path("outputs/wing_workflow")
 
 
 def _load_rows(path: Path) -> list[dict[str, str]]:
@@ -153,6 +154,28 @@ def validate_outputs(
                 )
             if not candidate_rows:
                 issues.append(f"Motor targeting candidates in {run_dir} are empty.")
+
+    if WING_WORKFLOW_ROOT.exists():
+        dae51_root = WING_WORKFLOW_ROOT / "dae51"
+        for required in [
+            dae51_root / "wing_workflow_summary.csv",
+            dae51_root / "wing_workflow_summary.md",
+        ]:
+            if not required.exists():
+                issues.append(f"Unified wing workflow is missing artifact {required}.")
+
+        speed_sweep_dirs = sorted((dae51_root / "speed_sweep").glob("rank*/*"))
+        for run_dir in speed_sweep_dirs:
+            for required in [
+                run_dir / "speed_sweep_summary.csv",
+                run_dir / "speed_sweep_summary.md",
+                run_dir / "speed_sweep_curves.csv",
+                run_dir / "speed_sweep_performance.png",
+                run_dir / "speed_sweep_operating_points.png",
+                run_dir / "speed_sweep_selected_curves.png",
+            ]:
+                if not required.exists():
+                    issues.append(f"Unified wing workflow speed sweep is missing artifact {required}.")
 
     return issues
 

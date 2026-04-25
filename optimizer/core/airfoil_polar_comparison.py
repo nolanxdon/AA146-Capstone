@@ -16,12 +16,13 @@ from optimizer.core.high_lift_model import (
     resolve_prop_drop_m,
 )
 from optimizer.core.stage3_refinement import ensure_stage3_runtime
+from optimizer.core.workflow_style import airfoil_red_styles
 
 
 @dataclass(frozen=True)
 class AirfoilPolarComparisonConfig:
     mission: Stage1MissionConfig = Stage1MissionConfig()
-    airfoils: tuple[str, ...] = ("s1210", "naca2412", "e423")
+    airfoils: tuple[str, ...] = ("s1210", "e423", "dae51", "naca0012", "naca2412")
     flap_deflections_deg: tuple[float, float] = (0.0, 40.0)
     cmu_levels: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5)
     alpha_min_deg: float = -6.0
@@ -51,6 +52,7 @@ class AirfoilPolarComparisonConfig:
         default_factory=lambda: {
             "s1210": "S1210",
             "dae51": "DAE51",
+            "naca0012": "NACA 0012",
             "naca2412": "NACA 2412",
             "e423": "Epler E423",
         }
@@ -519,11 +521,7 @@ def _render_airfoil_comparison_summary(
     plt.rcParams["mathtext.fontset"] = "stix"
 
     fig, axs = plt.subplots(2, 2, figsize=(12.4, 8.8))
-    styles = {
-        "s1210": {"color": "#1d4ed8", "marker": "o"},
-        "naca2412": {"color": "#059669", "marker": "s"},
-        "e423": {"color": "#dc2626", "marker": "^"},
-    }
+    styles = airfoil_red_styles(config.airfoils)
 
     for airfoil_name in config.airfoils:
         style = styles.get(airfoil_name, {"color": "#111827", "marker": "o"})
@@ -752,7 +750,11 @@ def run_airfoil_polar_comparison(
     lines = [
         "# Airfoil Blowing Comparison",
         "",
-        "This study compares `S1210`, `NACA 2412`, and `Epler E423` under the current blown-wing low-speed assumptions.",
+        (
+            "This study compares "
+            + ", ".join(f"`{_display_name(config, airfoil)}`" for airfoil in config.airfoils)
+            + " under the current blown-wing low-speed assumptions."
+        ),
         "",
         "## Assumptions",
         "",

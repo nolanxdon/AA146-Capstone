@@ -26,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-This paper documents the present end-to-end state of a blown-wing design workflow developed for a \SI{5}{kg}-class distributed-propulsion aircraft. The project begins with a fast Stage~1 Pareto-front optimizer that screens propeller count, propeller diameter, pitch ratio, and coarse propeller family while solving operating RPM internally. The resulting shortlist is then carried into a fixed-span geometry refinement, a rectangular-wing control-surface sizing study, a motor-height sensitivity study, and a representative motor/ESC target-sheet generator. The work is motivated primarily by two recent blown-wing studies. Hawkswell et al. demonstrated that a low-order, uniform two-dimensional jet model captures the first-order behaviour of a blown wing so long as the wing remains immersed in the jet, and further showed that propeller position and jet size govern the onset of abrupt stall.\cite{Hawkswell2022} Agrawal et al. experimentally characterized a blown slotted-flap wing in terms of section $c_l$, $c_x$, and $c_m$ as functions of angle of attack, flap angle, motor-axis angle, and jet momentum-excess coefficient, and showed that aggressive blown high-lift systems can achieve very large section lift while also incurring strong pitching-moment and stall-shape penalties.\cite{Agrawal2019} These two papers motivate the present modeling split: the blown portion of the wing is treated as a jet-covered two-dimensional strip, but aircraft-level $C_L$ and $C_M$ are always assembled by area-weighting blown and unblown portions of the wing at common $\alpha$. The current Stage~1 sweep evaluates 1386 propulsion architectures, of which 34 satisfy the present feasibility constraints and 11 survive onto the Pareto front. The selected study concept, referred to throughout as rank~6, is a $10\times 5.5\times 2.2$~in balanced propeller arrangement that was retained because it sits near the low-cruise-power edge of the nondominated set while also preserving the highest blown-wing momentum coefficient in the screened family. The downstream control-surface study indicates that the present concept supports a large, overlap-aware inboard single-slotted flap and a viable outboard aileron, but still falls short of the \SI{4.0}{m/s} target low-speed condition once the common-$\alpha$ whole-wing lift curve is used. The motor-height trade produces the expected three-part trend: lift first improves as immersion is recovered, then saturates, then degrades as the motor is dropped too far and the modeled stall becomes more abrupt. The full repository structure, equations, plots, and findings are recorded here in implementation-matched form so that future work can replace the current surrogates with experimentally calibrated or CFD-calibrated relationships without losing the logic of the present design space exploration.
+This paper documents the present end-to-end state of a blown-wing design workflow developed for a \SI{5}{kg}-class distributed-propulsion aircraft. The project begins with a fast Stage~1 Pareto-front optimizer that screens propeller count, propeller diameter, pitch ratio, and coarse propeller family while solving operating RPM internally. Stage~1 does \emph{not} collapse its objectives into a weighted scalar score; instead, feasible architectures are filtered by true three-objective nondominance in low-speed electrical power, loiter energy, and propulsion mass. The resulting shortlist is then carried into a fixed-span geometry refinement, a multi-airfoil front-end section study, a DAE51-centered rectangular-wing control-surface sizing study, a motor-height sensitivity study, and a frozen-geometry speed sweep from \SIrange{5}{15}{m/s} with RPM re-solved at each speed. The work is motivated primarily by two recent blown-wing studies. Hawkswell et al. demonstrated that a low-order, uniform two-dimensional jet model captures the first-order behaviour of a blown wing so long as the wing remains immersed in the jet, and further showed that propeller position and jet size govern the onset of abrupt stall.\cite{Hawkswell2022} Agrawal et al. experimentally characterized a blown slotted-flap wing in terms of section $c_l$, $c_x$, and $c_m$ as functions of angle of attack, flap angle, motor-axis angle, and jet momentum-excess coefficient, and showed that aggressive blown high-lift systems can achieve very large section lift while also incurring strong pitching-moment and stall-shape penalties.\cite{Agrawal2019} These two papers motivate the present modeling split: the blown portion of the wing is treated as a jet-covered two-dimensional strip, but aircraft-level $C_L$ and $C_M$ are always assembled by area-weighting blown and unblown portions of the wing at common $\alpha$. The current Stage~1 sweep evaluates 1386 propulsion architectures, of which 34 satisfy the present feasibility constraints and 11 survive onto the Pareto front. The selected study concept, referred to throughout as rank~6, is a $10\times 5.5\times 2.2$~in balanced propeller arrangement that was retained manually from that nondominated set because it sits near the low-cruise-power edge while also preserving the highest blown-wing momentum coefficient in the screened family. The downstream DAE51 control-surface study indicates that the present concept supports a large, overlap-aware inboard single-slotted flap and a viable outboard aileron, but still falls short of the \SI{4.0}{m/s} target low-speed condition once the common-$\alpha$ whole-wing lift curve is used. The motor-height trade produces the expected three-part trend: lift first improves as immersion is recovered, then saturates, then degrades as the motor is dropped too far and the modeled stall becomes more abrupt. The new off-design speed sweep further shows that the clean branch carries most of the feasible corridor, while the deployed-flap branches become increasingly drag- and thrust-limited away from the low-speed design point. The full repository structure, equations, plots, and findings are recorded here in implementation-matched form so that future work can replace the current surrogates with experimentally calibrated or CFD-calibrated relationships without losing the logic of the present design space exploration.
 \end{abstract}
 
 \section*{Nomenclature}
@@ -73,12 +73,13 @@ C_{L,\mathrm{req}} = \frac{W}{q_\infty S} \approx 7.15,
 \end{equation}
 which is far beyond conventional unblown wing capability. The design task is therefore not to make a mildly assisted wing, but to identify a propulsion architecture and high-lift system that can make a very-low-speed blown wing credible without producing unreasonable cruise penalties.
 
-The workflow implemented in this repository was built to answer four questions in sequence:
+The workflow implemented in this repository was built to answer five questions in sequence:
 \begin{enumerate}
 \item Which propeller architectures are energetically attractive once geometric packing, thrust, and blown-lift constraints are enforced?
 \item Which architecture should be carried forward into more detailed wing and control-surface work?
 \item What flap, aileron, and motor-height choices are consistent with a blown slotted-flap concept once the wing is treated as a mixture of blown and unblown regions?
 \item What operating-point implications follow for motor selection, trim burden, and low-speed controllability?
+\item How does the frozen wing and motor-height configuration behave off-design once RPM is re-solved from \SIrange{5}{15}{m/s}?
 \end{enumerate}
 
 The present repository therefore combines a coarse Pareto-front architecture screener with more detailed follow-on studies. The philosophy is deliberately hierarchical: use a simple but broad Stage~1 optimizer to downselect the propeller family, then impose literature-backed blown-wing physics on a smaller set of architectures. This is the same general spirit seen in Hawkswell et al., who used low-order reasoning to explore the coupled role of propeller size, position, and wing immersion in the jet before optimizing more specific aircraft-level outcomes,\cite{Hawkswell2022} and in Agrawal et al., who emphasized fitting section response surfaces from test data rather than pretending that one single momentum-theory equation captures every aspect of a blown flap.\cite{Agrawal2019}
@@ -140,12 +141,15 @@ optimizer/stages/stage2\_prop\_span.py & Prop-layout handoff & Converts Stage~1 
 optimizer/core/stage3\_refinement.py & Fixed-span geometry refinement & Runs the AeroSandbox-based wing and tail geometry refinement around shortlisted propulsion architectures. \\
 optimizer/stages/stage3\_aerosandbox.py & Stage~3 runner & Writes the fixed-span geometry refinement results and plot artifacts. \\
 optimizer/core/airfoil\_polar\_comparison.py & Airfoil comparison engine & Builds paper-style section response surfaces and representative wing-level airfoil comparisons. \\
-optimizer/stages/airfoil\_polar\_comparison.py & Airfoil comparison runner & Generates the S1210, NACA~2412, and E423 comparison artifacts. \\
+optimizer/stages/airfoil\_polar\_comparison.py & Airfoil comparison runner & Generates the multi-airfoil front-end comparison artifacts for S1210, E423, DAE51, NACA~0012, and NACA~2412. \\
 optimizer/core/high\_lift\_model.py & Shared blown high-lift model & Contains slotted-flap corrections, Cambridge-style immersion, and the over-drop penalty used by multiple downstream studies. \\
 optimizer/core/control\_surface\_sizing.py & Rectangular wing control study & Sizes the inboard slotted flap and outboard aileron, builds whole-wing $C_L$ and $C_M$ curves, and reports low-speed aileron proxies. \\
 optimizer/stages/control\_surface\_sizing.py & Control-surface runner & Writes the rectangular-wing control artifacts for a selected rank. \\
 optimizer/core/motor\_height\_trade.py & Motor-height sensitivity study & Evaluates clean and flapped branches over a range of motor drops using immersion plus over-drop stall penalty. \\
 optimizer/stages/motor\_height\_trade.py & Motor-height runner & Writes the motor-height summary CSVs and plots. \\
+optimizer/core/wing\_speed\_sweep.py & Frozen-geometry speed sweep & Re-solves RPM at each speed and flap state, updates \(V_{\mathrm{eff}}\) from the solved thrust level, and reports off-design whole-wing performance. \\
+optimizer/core/wing\_workflow.py & Unified workflow orchestrator & Runs the multi-airfoil front-end, DAE51 control sizing, DAE51 motor-height trade, and DAE51 speed sweep in a single consistent pipeline. \\
+optimizer/stages/wing\_workflow.py & Unified workflow runner & Writes the DAE51 workflow summary and standardized downstream artifact tree. \\
 optimizer/core/motor\_targeting.py & Representative motor/ESC target sheet & Converts the selected architecture operating point into Kv, current, power, and class-level motor/ESC targets. \\
 optimizer/stages/motor\_targeting.py & Motor-target runner & Writes the motor target summary and the class-comparison plot. \\
 optimizer/stages/validate\_outputs.py & Output consistency check & Ensures that the generated CSV schemas and expected artifacts remain coherent after code changes. \\
@@ -154,6 +158,20 @@ optimizer/stages/validate\_outputs.py & Output consistency check & Ensures that 
 \end{table*}
 
 This script architecture is not incidental; it embodies the philosophy of the project. Stage~1 is intentionally broad and cheap. The later files are narrower and more physically specific, but they only run after the architecture space has been pruned. This is the computational analogue of the design logic argued by Hawkswell et al.: use low-order reasoning to understand the main architectural trade before investing in more expensive analysis.\cite{Hawkswell2022}
+
+\subsection{Methodical data flow among scripts}
+
+The repository now behaves as a sequential research workflow rather than a loose collection of notebooks and post-processing utilities. In practical terms, the scripts communicate through explicit artifact handoffs:
+\begin{enumerate}
+\item \texttt{stage1\_screen.py} generates the full architecture sweep and the nondominated shortlist in CSV form.
+\item \texttt{stage2\_prop\_span.py} reconstructs explicit propeller centers, packing margins, and blown-span fractions for the shortlisted architectures.
+\item \texttt{airfoil\_polar\_comparison.py} generates the front-end section database and paper-style airfoil response grids.
+\item \texttt{control\_surface\_sizing.py} reads a selected architecture and airfoil, sizes the rectangular-wing flap and aileron, and writes the common-\(\alpha\) whole-wing \(C_L\) and \(C_M\) curves.
+\item \texttt{motor\_height\_trade.py} freezes that geometry and sweeps only motor drop, separating the clean-blown and slotted-flap-blown branches.
+\item \texttt{wing\_speed\_sweep.py} then freezes airfoil, control geometry, and motor height, re-solves RPM at each speed and flap state, and reports the off-design operating-point behavior.
+\item \texttt{validate\_outputs.py} is finally used to ensure that CSV schemas, row counts, and expected plot artifacts remain synchronized after each code change.
+\end{enumerate}
+This handoff logic matters because it keeps the same concept definition --- propeller count, diameter, pitch ratio, airfoil, flap geometry, aileron geometry, and motor-drop assumption --- flowing through the downstream studies without silent changes in interpretation.
 
 \section{Stage~1 Pareto-Front Propeller Optimizer}
 
@@ -197,6 +215,39 @@ P_{\mathrm{shaft,per}} &= C_P \rho n^3 D_p^5,
 \end{align}
 where \(n=\mathrm{RPM}/60\) and \(C_T\) and \(C_P\) are taken from coarse propeller-family fits. The purpose of these fits is not to identify a final propeller, but to keep the Stage~1 optimizer broad enough to search the architecture space quickly.
 
+The propeller coefficients are themselves functions of advance ratio and blade Reynolds number. The code first defines
+\begin{equation}
+J = \frac{V}{n D_p},
+\end{equation}
+then applies a family-dependent static scaling
+\begin{align}
+C_{T,\mathrm{static}} &= C_{T,\mathrm{base}}
+\left(\frac{P/D}{(P/D)_{\mathrm{ref}}}\right)^{0.35}, \\
+C_{P,\mathrm{static}} &= C_{P,\mathrm{base}}
+\left(\frac{P/D}{(P/D)_{\mathrm{ref}}}\right)^{0.80},
+\end{align}
+followed by a thrust and power roll-off with advance ratio:
+\begin{align}
+f_T(J) &= \max\!\left(0,\; 1 - \left(\frac{J}{J_{\mathrm{crit}}}\right)^{1.45}\right), \\
+f_P(J) &= \max\!\left(0.10,\; 1 - \left(\frac{J}{1.15J_{\mathrm{crit}}}\right)^{1.60}\right).
+\end{align}
+Finally, a blade Reynolds penalty is applied:
+\begin{equation}
+f_{Re} = \mathrm{clip}\!\left[\left(\frac{Re_b}{Re_{\mathrm{ref}}}\right)^{m_{Re}},\;
+f_{Re,\min},\; 1\right].
+\end{equation}
+The resulting implementation-matched coefficients are
+\begin{align}
+C_T &= C_{T,\mathrm{static}} f_T(J) f_{Re}, \\
+C_P &= C_{P,\mathrm{static}} \left(0.25 + 0.75 f_P(J)\right) f_{Re}.
+\end{align}
+The corresponding total electrical power and per-propeller torque are then
+\begin{align}
+P_{\mathrm{elec,tot}} &= \frac{P_{\mathrm{shaft,tot}}}{\eta_{\mathrm{elec}}} + P_{\mathrm{avionics}}, \\
+Q_{\mathrm{per}} &= \frac{P_{\mathrm{shaft,per}}}{2\pi n}.
+\end{align}
+These equations are used in the code to convert each candidate's geometry and solved RPM into total thrust, shaft power, electrical power, torque, and tip Mach. They are the main bridge between the architecture variables \((N_p,D_p,P/D,\text{family})\) and the low-speed/high-speed feasibility checks.
+
 The total effective blown velocity is then obtained from an actuator-disc interpretation:
 \begin{align}
 v_i &= \sqrt{\frac{T_{\mathrm{tot}}}{2\rho A_{\mathrm{disk}}}}, \\
@@ -207,6 +258,12 @@ Stage~1 also defines a wing-reference momentum coefficient,
 C_\mu = \frac{T_{\mathrm{tot}}}{q_\infty S},
 \end{equation}
 which is later used as one measure of blown authority.
+
+This is the main Stage~1 blown-wing objective metric and is the repository analogue of the low-order blown-wing forcing parameter emphasized by Hawkswell et al.\cite{Hawkswell2022} The airfoil-front-end study also keeps Agrawal et al.'s jet momentum-excess notation in view. Their section experiments are parameterized by
+\begin{equation}
+\Delta c_J = 2c_Q\left(\frac{V_J}{V_\infty} - \frac{V_\infty}{V_J}\right),
+\end{equation}
+which is not identical to the repository's \(C_\mu\), but serves the same conceptual purpose of measuring the strength of the jet relative to the freestream.\cite{Agrawal2019} The present code therefore uses \(C_\mu\) in Stage~1 and representative \(\Delta c_J\)-style section plots in the airfoil front-end without pretending they are identical quantities.
 
 The choice to keep both \(V_{\mathrm{eff}}\) and \(C_\mu\) in the optimizer is directly motivated by Hawkswell et al. Their discussion of jet size versus jet velocity implies that one cannot rank architectures purely by thrust, purely by power, or purely by jet speed: the candidate must also preserve enough jet coverage to keep the wing immersed.\cite{Hawkswell2022}
 
@@ -229,6 +286,53 @@ V_{\mathrm{eff,req}} = \sqrt{\frac{2q_{b,\mathrm{req}}}{\rho}}.
 
 This is not yet a full Agrawal-style \(\Delta c_J\) surface fit, but it serves the same design purpose: it forces the optimizer to ask how much local blown dynamic pressure is actually needed to carry the wing at the low-speed operating point, rather than presuming the answer in advance.\cite{Agrawal2019}
 
+The Stage~1 low-speed drag estimate is then assembled from separate blown and unblown strips:
+\begin{align}
+k &= \frac{1}{\pi e AR}, \\
+C_{D,u} &= \gamma_{\mathrm{trim}}
+\left(f_{u} C_{D0,\mathrm{flap}} + k c_{l,u}^{2}\right), \\
+C_{D,b} &= \gamma_{\mathrm{trim}}
+\left(f_{b} C_{D0,\mathrm{flap}} + k c_{l,b}^{2}\right),
+\end{align}
+and
+\begin{equation}
+D_{\mathrm{low}} = q_\infty S_u C_{D,u} + q_b S_b C_{D,b}.
+\end{equation}
+The role of this equation in the solver is straightforward: low-speed thrust must exceed both the drag-driven requirement and the blowing-driven requirement, so the propeller system is only considered feasible if it can satisfy
+\begin{equation}
+T_{\mathrm{tot}} \ge \max\!\left(\gamma_T D_{\mathrm{low}},\; T_{\mathrm{req}}(V_{\mathrm{eff,req}})\right),
+\end{equation}
+where \(\gamma_T\) is the low-speed thrust margin factor. This is the key mechanism that prevents the optimizer from selecting an architecture that produces a large jet but not enough total thrust.
+
+\subsection{RPM closure and mass closure}
+
+RPM is not treated as a free outer-loop design variable. Instead, the solver finds the minimum RPM that closes the low-speed and cruise conditions by bisection on the residuals
+\begin{align}
+R_{\mathrm{low}}(\mathrm{RPM}) &=
+T_{\mathrm{tot}}(\mathrm{RPM}) -
+\max\!\left(\gamma_{T,\mathrm{low}} D_{\mathrm{low}}(\mathrm{RPM}),\;
+T_{\mathrm{req}}(V_{\mathrm{eff,req}}(\mathrm{RPM}))\right), \\
+R_{\mathrm{cruise}}(\mathrm{RPM}) &=
+T_{\mathrm{tot}}(\mathrm{RPM}) - \gamma_{T,\mathrm{cruise}} D_{\mathrm{cruise}}.
+\end{align}
+This matters because it collapses the Stage~1 architecture space onto physical operating points rather than allowing the Pareto front to be inflated by redundant throttle settings.
+
+Once a candidate has solved low-speed and cruise RPM, the repository estimates motor, ESC, propeller, and battery mass. The battery closure is
+\begin{align}
+E_{\mathrm{climb}} &= P_{\mathrm{low}} \frac{t_{\mathrm{climb}}}{60}, \\
+E_{\mathrm{loiter}} &= P_{\mathrm{cruise}} \frac{t_{\mathrm{loiter}}}{60}, \\
+m_{\mathrm{battery}} &=
+\frac{(E_{\mathrm{climb}} + E_{\mathrm{loiter}})(1+r_{\mathrm{reserve}})}
+\varepsilon_{\mathrm{battery}}},
+\end{align}
+where \(\varepsilon_{\mathrm{battery}}\) is the battery specific energy in \si{Wh/kg}. The propulsion masses are fit as power laws to representative component datasets:
+\begin{align}
+m_{\mathrm{prop}} &\sim a_p D_p^{b_p}\left(1 + k_p \frac{P}{D}\right), \\
+m_{\mathrm{motor}} &\sim a_m P_{\mathrm{peak}}^{b_m}, \\
+m_{\mathrm{ESC}} &\sim a_e I_{\mathrm{cont}}^{b_e}.
+\end{align}
+These equations are used only to rank architectures and enforce a mass budget; they are not intended to replace final hardware selection.
+
 \subsection{Objectives and constraints}
 
 The present Stage~1 Pareto front uses three objectives:
@@ -237,6 +341,17 @@ The present Stage~1 Pareto front uses three objectives:
 \min \; E_{\mathrm{loiter}}, \qquad
 \min \; m_{\mathrm{propulsion}}.
 \end{align}
+Crucially, these objectives are \emph{not} combined into a weighted sum. The code in \texttt{optimizer/core/pareto.py} evaluates true nondominance: a feasible candidate \(i\) is removed only if there exists another feasible candidate \(j\) such that
+\begin{align}
+f_k^{(j)} &\le f_k^{(i)} \qquad \text{for } k\in\{1,2,3\}, \\
+f_k^{(j)} &< f_k^{(i)} \qquad \text{for at least one } k,
+\end{align}
+with
+\begin{equation}
+\mathbf{f} =
+\left(P_{\mathrm{low}},\, E_{\mathrm{loiter}},\, m_{\mathrm{propulsion}}\right).
+\end{equation}
+The returned front is later sorted lexicographically by this objective tuple, but that ordering affects only how the CSV and console report are printed; it does not alter front membership. This distinction matters for the interpretation of the selected concept: rank~6 is a later human-selected study point from the nondominated set, not the output of a hidden Stage~1 weighted score.
 
 At the same time, the following constraints are enforced:
 \begin{itemize}
@@ -267,12 +382,12 @@ First, the feasible set is strongly shaped by geometry. Many nominally attractiv
 
 \subsection{Why rank~6 was selected}
 
-The concept used throughout the downstream studies is the Stage~3 rank~6 propulsion architecture:
+The concept used throughout the downstream studies is the later-report rank~6 propulsion architecture:
 \begin{equation}
 10 \times 5.5 \times 2.2 \;\text{in}, \qquad P/D = 0.40, \qquad \text{balanced prop family}.
 \end{equation}
 
-It is important to be precise about why this architecture was retained. It was not chosen because it had the single lowest cruise power in the Pareto set; the \(10\times 5.5\) cruise-family neighbor is slightly lower in cruise power. Instead, the \(10\times 5.5\) \emph{family} was retained because it sits very near the low-cruise-power edge while also delivering the highest Stage~1 momentum coefficient in the nondominated set:
+It is important to be precise about why this architecture was retained. Stage~1 itself did not assign a weighted rank to it. Instead, the downstream study concept was selected manually from the nondominated set after inspecting the Pareto plots and the explicit Stage~1 outputs. It was not chosen because it had the single lowest cruise power in the Pareto set; the \(10\times 5.5\) cruise-family neighbor is slightly lower in cruise power. Instead, the \(10\times 5.5\) \emph{family} was retained because it sits very near the low-cruise-power edge while also delivering the highest Stage~1 momentum coefficient in the nondominated set:
 \begin{equation}
 C_\mu \approx 1.544,
 \end{equation}
@@ -310,23 +425,32 @@ The present Stage~1 mass closure for this concept gives about \SI{0.11}{kg} of p
 
 \section{Airfoil Comparison and Wing-Section Direction}
 
-Before sizing control surfaces, the repository compares three airfoils under a representative blown-wing scenario: S1210, NACA~2412, and E423. This study does not replace a full three-dimensional wing analysis, but it is useful for understanding the trade among lift, drag, and pitching moment before committing to a section family.
+Before sizing control surfaces, the repository now runs a multi-airfoil front-end study under a representative blown-wing scenario. The current unified workflow keeps S1210, E423, DAE51, NACA~0012, and NACA~2412 in this front-end stage, then carries only DAE51 into the downstream rectangular-wing control, motor-height, and off-design speed-sweep workflow. This study does not replace a full three-dimensional wing analysis, but it is useful for understanding the trade among lift, drag, and pitching moment before committing to a section family.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/airfoil_comparison/airfoil_comparison_summary.png}
-    \caption{Representative wing-level airfoil comparison under the current blown-wing assumptions. The S1210 and E423 sections both outperform NACA~2412 in achievable blown-wing lift, but they do so at the cost of more negative pitching moment. This is consistent with the central high-lift versus trim-burden trade observed in the control-surface study.}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/airfoil_frontend/airfoil_comparison_summary.png}
+    \caption{Representative wing-level airfoil comparison under the current blown-wing assumptions. The front-end workflow preserves the comparative airfoil study, but the detailed downstream sizing is now intentionally concentrated on DAE51 so that geometry, motor-height, and off-design speed effects are all studied on one common wing.}
     \label{fig:airfoil-summary}
 \end{figure}
 
-At \(\delta_f = 40^\circ\) and representative blowing level \(C_\mu=1.5\), the current wing-level summary predicts:
+At \(\delta_f = 40^\circ\) and representative blowing level \(C_\mu=1.5\), the current representative wing-level summary predicts:
 \begin{itemize}
 \item S1210: \(C_{L,\max,\mathrm{rep}} \approx 5.91\), \(C_M(\alpha=0) \approx -0.82\),
 \item E423: \(C_{L,\max,\mathrm{rep}} \approx 5.77\), \(C_M(\alpha=0) \approx -0.70\),
 \item NACA~2412: \(C_{L,\max,\mathrm{rep}} \approx 5.56\), \(C_M(\alpha=0) \approx -0.37\).
 \end{itemize}
 
-This mirrors the design intuition behind the project. NACA~2412 is easier to live with from a trim perspective, but it gives up meaningful blown-wing lift. S1210 provides the strongest lift, but also the strongest nose-down tendency. E423 sits between the two. The present rectangular-wing study therefore uses S1210 not because it is uniquely superior in every metric, but because it gives the highest-lift edge in the current blown-wing envelope and is therefore a useful upper-bound wing section for the control-surface study. Agrawal et al. provide the physical context for this trade by showing that strong blown-flap systems couple high lift and nontrivial pitching-moment behaviour rather than improving one without affecting the other.\cite{Agrawal2019}
+This mirrors the design intuition behind the project. NACA~2412 is easier to live with from a trim perspective, but it gives up meaningful blown-wing lift. S1210 provides the strongest lift, but also the strongest nose-down tendency. E423 sits between the two. DAE51 is the compromise section that the current unified workflow carries forward: it gives up some peak lift relative to S1210 and E423, but it also reduces the wing-only pitching-moment burden materially relative to those stronger high-lift sections. Agrawal et al. provide the physical context for this trade by showing that strong blown-flap systems couple high lift and nontrivial pitching-moment behaviour rather than improving one without affecting the other.\cite{Agrawal2019}
+
+The later rectangular-wing trade reinforces the same qualitative structure while also revealing an important modeling nuance. With the rank~6 propulsor, fixed rectangular wing, and fixed blown-flap geometry, the whole-wing high-lift results are
+\begin{align}
+\text{S1210:} \quad & C_{L,\max} \approx 6.00, & C_M \approx -0.90, \\
+\text{E423:} \quad & C_{L,\max} \approx 5.90, & C_M \approx -0.79, \\
+\text{DAE51:} \quad & C_{L,\max} \approx 5.81, & C_M \approx -0.68, \\
+\text{NACA~0012:} \quad & C_{L,\max} \approx 5.59, & C_M \approx -0.48.
+\end{align}
+These curves look more similar than the underlying section polars might suggest. That similarity is real, but it should be interpreted carefully. The present whole-wing model holds the propeller architecture, flap geometry, blown-area fractions, immersion logic, and blown-strip cap fixed across all airfoils. As a result, the airfoil-specific differences are partially compressed when they are averaged into a common whole-wing response. In practice, this means the current airfoil study is more trustworthy as a \emph{ranking and clustering tool} than as a precise separator of small differences. The model clearly distinguishes a top-lift cluster (S1210 and E423), a middle compromise (DAE51), and a weaker low-speed option (NACA~0012), but it should not be used to over-interpret a difference of only a few hundredths in \(C_L\) as if it were already experimentally resolved.
 
 \section{Planform Refinement and Selected Geometry}
 
@@ -353,7 +477,7 @@ This distinction is important. The Stage~3 geometry result is best interpreted a
 
 \subsection{Why motors in front of flaps matter}
 
-The present control-surface study focuses on a rectangular wing of span \SI{2.0}{m} and chord \SI{0.35}{m}. The specific design question is not merely ``what flap and aileron fit on the wing?'' but rather ``what flap and aileron make sense when the inboard propellers are intended to blow the flap system?''
+The present control-surface study focuses on a rectangular wing of span \SI{2.0}{m} and chord \SI{0.35}{m} using DAE51 as the downstream section choice. The specific design question is not merely ``what flap and aileron fit on the wing?'' but rather ``what flap and aileron make sense when the inboard propellers are intended to blow the flap system?''
 
 Agrawal et al. provide the main physical motivation for this emphasis. Their section-response and wake results show that the blown slotted-flap system benefits from injecting higher total pressure into the flap region and turning the jet downward through the flap, thereby increasing lift while also modifying pitching moment.\cite{Agrawal2019} In other words, the flap is not an isolated high-lift device; it is part of a jet/flap system. That is why the present repository no longer allows the flap span to drift to the smallest-area solution. Instead, the flap candidates are penalized if they fail to cover enough of the inboard propeller array.
 
@@ -373,12 +497,42 @@ C_M(\alpha)
 \end{equation}
 where the index \(k\) spans the clean-unblown, clean-blown, flap-unblown, and flap-blown subareas. This is the crucial step that keeps the project from confusing a large section \(c_l\) with an equally large whole-wing \(C_L\).
 
+The code implements the blown-strip part of this assembly in two steps. First, an immersed blown-strip coefficient is formed from the local blown and unblown section response:
+\begin{equation}
+\tilde c_{l,b}^{\,\mathrm{raw}} =
+c_{l,u} +
+\chi\left[\left(\frac{q_b}{q_\infty}\right)c_{l,b} - c_{l,u}\right],
+\end{equation}
+where \(\chi\) is the immersion factor described below. Second, the freestream-referenced blown-strip contribution is softly limited to remain within the same order of magnitude as the section-level blown-flap data:
+\begin{equation}
+\tilde c_{l,b} =
+c_{l,\mathrm{lim}}\;
+\tanh\!\left(\frac{\tilde c_{l,b}^{\,\mathrm{raw}}}{c_{l,\mathrm{lim}}}\right).
+\end{equation}
+The same scale factor is applied to the corresponding blown-strip \(c_d\) and \(c_m\). In the repository this step is used to prevent the whole-wing assembly from reporting obviously inflated values that would arise if the local section coefficients were multiplied by the full dynamic-pressure ratio without any bounded interpretation.
+
+This correction was introduced after an earlier reporting bug made the whole-wing \(C_L\) unrealistically large by effectively multiplying a maximum obtainable unblown section value by the full velocity-ratio scaling. The present implementation instead evaluates the clean and blown section responses at the actual common \(\alpha\) of the flight condition and then assembles the full wing from those strip contributions. This is much closer to the logic of both Hawkswell's two-dimensional immersed-strip treatment and Agrawal's section-response framework.\cite{Hawkswell2022,Agrawal2019}
+
 The section polars themselves are built from three ingredients:
 \begin{enumerate}
 \item NeuralFoil-based clean and flap-deflected section response,
 \item a staged slotted-flap correction that separates low-angle lift-curve displacement from near-stall augmentation,
 \item the Cambridge-style blown-strip immersion weighting and the bounded over-drop stall penalty described later.
 \end{enumerate}
+
+The slotted-flap correction is also implementation-matched rather than purely conceptual. The code begins with the clean and flap-deflected NeuralFoil curves, then applies a staged increment
+\begin{equation}
+\Delta c_l(\alpha) =
+\Delta c_{l,0} G_{\mathrm{low}}(\alpha) +
+\Delta c_{l,\max} G_{\mathrm{peak}}(\alpha),
+\end{equation}
+with
+\begin{align}
+\Delta c_{l,0} &\propto \left(\frac{c_f}{c}\right)\sin\delta_f, \\
+\Delta c_{l,\max} &\propto
+\left(\frac{c_f}{c}\right)^{0.8}\sin^{0.95}\delta_f,
+\end{align}
+where \(G_{\mathrm{low}}\) and \(G_{\mathrm{peak}}\) are smooth low-angle and near-peak gates. This allows the model to increase low-angle camber-like lift and near-stall flap benefit separately, which proved necessary once the flap deflection reached \(40^\circ\).
 
 \subsection{Selected flap and aileron geometry}
 
@@ -394,8 +548,8 @@ The resulting layout is shown in Fig.~\ref{fig:layout}. The flap overlaps 8 of t
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/layout.png}
-    \caption{Rectangular-wing flap and aileron layout for the selected rank~6 propulsion architecture. The flap was intentionally pushed to \(65\%\) of semispan so that most of the inboard propeller disks lie over the slotted flap rather than over the clean wing. This geometry is a direct response to the blown-flap mechanism emphasized by Agrawal et al.\cite{Agrawal2019}}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/layout.png}
+    \caption{Rectangular-wing flap and aileron layout for the selected rank~6 propulsion architecture in the unified DAE51 workflow. The flap was intentionally pushed to \(65\%\) of semispan so that most of the inboard propeller disks lie over the slotted flap rather than over the clean wing. This geometry is a direct response to the blown-flap mechanism emphasized by Agrawal et al.\cite{Agrawal2019}}
     \label{fig:layout}
 \end{figure}
 
@@ -403,49 +557,62 @@ The flap-sizing heatmap in Fig.~\ref{fig:flap-heatmap} shows why this solution w
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/flap_heatmap.png}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/flap_heatmap.png}
     \caption{Rectangular-wing flap heatmap for the selected rank~6 propulsion architecture. Once motor-overlap penalties are included, the optimum flap shifts toward the large-span, large-chord corner rather than collapsing to a small flap.}
     \label{fig:flap-heatmap}
 \end{figure}
 
 \subsection{Whole-wing \(C_L\), \(C_M\), and low-speed aileron authority}
 
-The corrected whole-wing lift result for the selected rectangular wing is shown in Fig.~\ref{fig:total-cl}. The maximum freestream-referenced aircraft lift coefficient is
+The corrected whole-wing lift result for the selected rectangular DAE51 wing is shown in Fig.~\ref{fig:total-cl}. The maximum freestream-referenced aircraft lift coefficient is
 \begin{equation}
-C_{L,\max} \approx 6.00,
+C_{L,\max} \approx 5.81,
 \end{equation}
 occurring at
 \begin{equation}
-\alpha \approx 13.27^\circ.
+\alpha \approx 12.98^\circ.
 \end{equation}
-This corresponds to an equivalent stall speed of about \SI{4.36}{m/s}. The \SI{4.0}{m/s} requirement line remains above the curve, meaning that the present rectangular blown-flap concept still falls short of the mission requirement once the whole wing is assembled consistently.
+This corresponds to an equivalent stall speed of about \SI{4.44}{m/s}. The \SI{4.0}{m/s} requirement line remains above the curve, meaning that the present rectangular blown-flap concept still falls short of the mission requirement once the whole wing is assembled consistently.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/total_cl_curve.png}
-    \caption{Whole-wing freestream-referenced \(C_L\) curve for the selected rectangular-wing configuration. The all-high-lift branch includes flap deflection, blowing, and immersion weighting. The dashed lines denote the required freestream-referenced \(C_L\) at several flight speeds; the \SI{4.0}{m/s} line remains above the attainable value, demonstrating that the current concept is close but not yet sufficient for the original low-speed requirement.}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/total_cl_curve.png}
+    \caption{Whole-wing freestream-referenced \(C_L\) curve for the selected rectangular-wing DAE51 configuration. The all-high-lift branch includes flap deflection, blowing, and immersion weighting. The dashed lines denote the required freestream-referenced \(C_L\) at several flight speeds; the \SI{4.0}{m/s} line remains above the attainable value, demonstrating that the current concept is close but not yet sufficient for the original low-speed requirement.}
     \label{fig:total-cl}
 \end{figure}
 
+The stall interpretation deserves care. In the present whole-wing curves, the peak occurs near \(\alpha \approx 13^\circ\), while the lift does not fall to roughly 90\% of the peak value until around \(\alpha \approx 20^\circ\). The correct reading is therefore not that the airplane ``really stalls at \(20^\circ\).'' Rather, the model predicts that the blown slotted-flap system reaches its peak lift near \(13^\circ\) and then degrades gradually enough that substantial lift persists into the high teens. This is qualitatively similar to the section-level behaviour documented by Agrawal et al., where the blown-flap configurations retain large \(c_l\) values to relatively high incidence before the post-stall decay becomes unmistakable.\cite{Agrawal2019} In that sense the present solver agrees with the literature in trend, even though the exact post-stall shape should still be regarded as a model output rather than a validated experimental truth.
+
 The pitching-moment consequence of this configuration is shown in Fig.~\ref{fig:total-cm}. At the same high-lift point,
 \begin{equation}
-C_M \approx -0.90,
+C_M \approx -0.68,
 \end{equation}
-while the corresponding blowing-only branch is closer to \(C_M \approx -0.50\). This is a central result of the present project: the flap and the motors in front of it do add lift, but they also deepen the wing-only nose-down pitching moment. That trend is entirely consistent with Agrawal et al., who observed that blowing at nonzero flap angles can strongly alter \(c_m\) because the downward turning jet effectively acts through the flap system aft of the quarter chord.\cite{Agrawal2019}
+while the corresponding blowing-only branch is closer to \(C_M \approx -0.21\). This is a central result of the present project: the flap and the motors in front of it do add lift, but they also deepen the wing-only nose-down pitching moment. That trend is entirely consistent with Agrawal et al., who observed that blowing at nonzero flap angles can strongly alter \(c_m\) because the downward turning jet effectively acts through the flap system aft of the quarter chord.\cite{Agrawal2019}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/total_cm_curve.png}
-    \caption{Whole-wing freestream-referenced \(C_M\) curve for the selected rectangular-wing configuration. The flap-plus-blowing branch is substantially more nose-down than the blowing-only branch near the peak-lift condition, demonstrating that the blown slotted-flap system should be viewed as both a lift device and a trim device.}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/total_cm_curve.png}
+    \caption{Whole-wing freestream-referenced \(C_M\) curve for the selected rectangular-wing DAE51 configuration. The flap-plus-blowing branch is substantially more nose-down than the blowing-only branch near the peak-lift condition, demonstrating that the blown slotted-flap system should be viewed as both a lift device and a trim device.}
     \label{fig:total-cm}
 \end{figure}
 
-The low-speed aileron proxy, shown in Fig.~\ref{fig:low-speed-aileron}, indicates that approximately 59\% of the aileron span lies in the blown intervals, with a local dynamic-pressure ratio of about 8.3 and a local effective velocity of about \SI{11.53}{m/s}. This produces a low-speed roll-rate proxy of approximately \SI{13}{deg/s} at the nominal \(14^\circ\) aileron deflection. This is not yet a full lateral-directional trim calculation, but it is a useful wing-only check that the blown inboard system does not completely destroy outboard control authority at low speed.
+The low-speed aileron proxy, shown in Fig.~\ref{fig:low-speed-aileron}, indicates that approximately 59\% of the aileron span lies in the blown intervals, with a local dynamic-pressure ratio of about 8.3 and a local effective velocity of about \SI{11.53}{m/s}. This produces a low-speed roll-rate proxy of approximately \SI{13.4}{deg/s} at the nominal \(14^\circ\) aileron deflection. This is not yet a full lateral-directional trim calculation, but it is a useful wing-only check that the blown inboard system does not completely destroy outboard control authority at low speed.
+
+The underlying roll-rate relation is the standard quasi-steady balance between aileron rolling moment and roll damping. In coefficient form,
+\begin{equation}
+\hat p_{\mathrm{ss}} = -\frac{C_{l_{\delta_a}}\delta_a}{C_{l_{\hat p}}},
+\end{equation}
+which the code converts to a dimensional roll-rate estimate through
+\begin{equation}
+\dot\phi_{\mathrm{ss}} \approx
+\hat p_{\mathrm{ss}}\frac{2V}{b}.
+\end{equation}
+In cruise this relation is evaluated directly from the AeroSandbox VLM derivatives. In the low-speed blown case the same structure is retained, but the derivatives are scaled by blown-overlap fraction and local dynamic-pressure ratio to produce the explicitly labeled roll-rate proxy.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/low_speed_aileron_curves.png}
-    \caption{Low-speed aileron authority proxy for the selected rectangular-wing configuration. The present model scales the aileron response by blown-span overlap and local dynamic pressure rather than claiming a full blown-control CFD solution. The result is nevertheless sufficient to show that the outboard aileron retains nonzero authority in the low-speed blown-wing condition.}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/low_speed_aileron_curves.png}
+    \caption{Low-speed aileron authority proxy for the selected rectangular-wing DAE51 configuration. The present model scales the aileron response by blown-span overlap and local dynamic pressure rather than claiming a full blown-control CFD solution. The result is nevertheless sufficient to show that the outboard aileron retains nonzero authority in the low-speed blown-wing condition.}
     \label{fig:low-speed-aileron}
 \end{figure}
 
@@ -457,7 +624,57 @@ The present motor-height trade combines two mechanisms.
 
 The first is the Cambridge-style immersion criterion. In the code this is implemented as a smooth immersion factor that tends toward unity when the wing remains within the jet and tends toward zero when the jet rises above the wing. This is the direct implementation of Hawkswell et al.'s central observation that the wing should remain submerged in the jet at the operating incidence.\cite{Hawkswell2022}
 
+The implementation begins by defining an available submergence,
+\begin{equation}
+h_{\mathrm{avail}} = \frac{1}{2}H_j D_p + \Delta z_p,
+\end{equation}
+where \(H_j\) is the jet-core height factor, \(D_p\) is propeller diameter, and \(\Delta z_p\) is motor drop. The required submergence for the clean strip is
+\begin{equation}
+h_{\mathrm{req,c}} =
+c\left(\beta_0 + \beta_\alpha \sin\alpha\right)a_x,
+\end{equation}
+and for the flap strip
+\begin{equation}
+h_{\mathrm{req,f}} =
+h_{\mathrm{req,c}} +
+c\,\beta_f \left(\frac{c_f}{c}\right)\sin\delta_f.
+\end{equation}
+The axial factor is
+\begin{equation}
+a_x = 1 + 0.35\frac{\max(|x_p/c|-0.25,0)}{0.25}.
+\end{equation}
+The final immersion factors are
+\begin{align}
+\chi_c &= \frac{1}{2}\left[1+\tanh\left(\frac{h_{\mathrm{avail}}-h_{\mathrm{req,c}}}{\ell_\chi}\right)\right], \\
+\chi_f &= \frac{1}{2}\left[1+\tanh\left(\frac{h_{\mathrm{avail}}-h_{\mathrm{req,f}}}{\ell_\chi}\right)\right],
+\end{align}
+where \(\ell_\chi\) is the jet-softness length scale. These equations are used directly in the whole-wing assembly to determine how much of the blown-strip benefit survives at each \(\alpha\).
+
 The second is a bounded over-drop penalty. This is \emph{not} a paper-derived formula; it is a paper-informed surrogate introduced to capture the qualitative MIT/Agrawal-style observation that overly aggressive jet geometry can make the high-lift system stall more suddenly.\cite{Agrawal2019} The penalty is intentionally weak at low angle of attack and becomes active mainly near the peak-lift and post-stall region.
+
+The severity scalar begins with a nondimensional motor-drop ratio \(h=\Delta z_p/c\):
+\begin{equation}
+s_0 =
+\left[
+\max\!\left(
+\frac{h-h_{\mathrm{on}}}{h_{\mathrm{ref}}-h_{\mathrm{on}}},
+0\right)
+\right]^{p}
+\left[\max\!\left(\frac{V_{\mathrm{eff}}}{V_\infty}-1,0\right)\right]^{q},
+\end{equation}
+which is then bounded as
+\begin{equation}
+s = \frac{s_0}{1+s_0}.
+\end{equation}
+If the flap is active, the code multiplies this severity by a relief factor to represent the fact that the slotted-flap system tolerates drop somewhat better than the clean strip. The penalty then shifts the apparent peak to lower angle of attack and steepens the post-stall decay:
+\begin{align}
+\alpha_{\mathrm{eff}} &= \alpha + K_\alpha s G_{\mathrm{stall}}(\alpha), \\
+c_l^\star &=
+\mathcal{I}[c_l](\alpha_{\mathrm{eff}})
+\left(1-K_{cl}sG_{\mathrm{stall}}\right)
+\exp\!\left(-K_{\mathrm{post}} s G_{\mathrm{post}}\right),
+\end{align}
+where \(\mathcal{I}[c_l]\) denotes interpolation on the original polar and \(G_{\mathrm{stall}}, G_{\mathrm{post}}\) are smooth gates that activate near and beyond the peak-lift region. The code applies analogous penalties to \(c_d\) and \(c_m\). The purpose of these equations is not to claim a final stall model, but to ensure the motor-height trade can express the literature-backed ``too high loses immersion, too low stalls more abruptly'' trend.
 
 \subsection{Trade setup}
 
@@ -482,18 +699,18 @@ The results of the trade are shown in Figs.~\ref{fig:motor-metrics} and \ref{fig
 \item too low: over-drop penalty activates, stall sharpens, benefit degrades.
 \end{enumerate}
 
-For the clean blown wing, the best equivalent stall speed occurs near a drop of \SI{42}{mm} (\(\Delta z_p/c = 0.12\)) and the blown-wing benefit saturates by about \(\Delta z_p/c = 0.08\). For the slotted-flap branch, the optimum is similarly near \(\Delta z_p/c = 0.12\), but the degradation beyond that point is somewhat more gradual. This is physically plausible: the flap system can tolerate somewhat more jet immersion before the upper-surface or post-flap flow begins to deteriorate.
+For the clean blown wing, the best equivalent stall speed occurs near a drop of \SI{42}{mm} (\(\Delta z_p/c = 0.12\)) and the blown-wing benefit saturates by about \(\Delta z_p/c = 0.08\). For the slotted-flap branch, the optimum is similarly near \(\Delta z_p/c = 0.12\), but the degradation beyond that point is somewhat more gradual. This is physically plausible: the flap system can tolerate somewhat more jet immersion before the upper-surface or post-flap flow begins to deteriorate. These values now come from the DAE51-centered unified workflow rather than from the earlier generic rank-6 study.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/motor_height_trade/rank06_n10_d5p5_p2p2_balanced_b3/motor_height_trade_metrics.png}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/motor_height_trade/rank06_n10_d5p5_p2p2_balanced_b3/dae51/motor_height_trade_metrics.png}
     \caption{Motor-height trade metrics for the selected rank~6 architecture. Both the clean and flapped branches first improve with increasing drop, then plateau, then degrade as the over-drop penalty becomes active.}
     \label{fig:motor-metrics}
 \end{figure}
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.92\linewidth]{../outputs/motor_height_trade/rank06_n10_d5p5_p2p2_balanced_b3/motor_height_trade_cl_overlay.png}
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/motor_height_trade/rank06_n10_d5p5_p2p2_balanced_b3/dae51/motor_height_trade_cl_overlay.png}
     \caption{Whole-wing \(C_L\) overlays for the clean-blown and slotted-flap-blown branches at multiple motor-drop values. The overly low motor positions do not simply reduce peak lift; they also make the post-stall decay substantially steeper.}
     \label{fig:motor-overlay}
 \end{figure}
@@ -501,11 +718,60 @@ For the clean blown wing, the best equivalent stall speed occurs near a drop of 
 Numerically, the current trade gives the following representative results:
 \begin{itemize}
 \item clean blown wing at \(\Delta z_p/c = 0.12\): \(C_{L,\max}\approx 5.85\), \(V_s\approx \SI{4.42}{m/s}\),
-\item slotted flap plus blowing at \(\Delta z_p/c = 0.12\): \(C_{L,\max}\approx 6.00\), \(V_s\approx \SI{4.36}{m/s}\),
+\item slotted flap plus blowing at \(\Delta z_p/c = 0.12\): \(C_{L,\max}\approx 5.81\), \(V_s\approx \SI{4.44}{m/s}\),
 \item neither branch meets the \SI{4.0}{m/s} target under the current assumptions.
 \end{itemize}
 
 The present project therefore supports a simple design statement: motor drop should be large enough to keep the flap/wing system immersed in the jet, but not so large that the stall behaviour becomes unacceptably abrupt.
+
+\section{Unified DAE51 Workflow and Frozen-Geometry Speed Sweep}
+
+The current repository no longer treats the airfoil comparison, control sizing, motor-height trade, and off-design speed evaluation as loosely connected side studies. Instead, \texttt{optimizer/core/wing\_workflow.py} now runs a single downstream sequence:
+\begin{enumerate}
+\item multi-airfoil front-end section analysis,
+\item DAE51 rectangular-wing control-surface sizing at the low-speed design point,
+\item DAE51 motor-height trade on the frozen control geometry,
+\item frozen-geometry DAE51 speed sweep from \SIrange{5}{15}{m/s} in \SI{0.5}{m/s} increments.
+\end{enumerate}
+The design passed into this workflow is the same one reported above: flap span fraction 0.65, flap chord fraction 0.34, aileron span fraction 0.28, aileron chord fraction 0.28, and optimized motor drop \(\Delta z_p/c = 0.12\).
+
+The speed sweep evaluates three flap states at every speed,
+\begin{equation}
+\delta_f \in \{0^\circ, 20^\circ, 40^\circ\},
+\end{equation}
+and re-solves RPM at each condition rather than carrying the original low-speed blown velocity forward unchanged. In implementation-matched form, the off-design solve seeks the smallest RPM such that both lift and thrust closure are satisfied:
+\begin{equation}
+R_{\mathrm{sweep}}(\mathrm{RPM})
+=
+\min\!\left(
+C_{L,\max}(\mathrm{RPM})-C_{L,\mathrm{req}},
+T_{\mathrm{tot}}(\mathrm{RPM})-D_{\mathrm{req}}(\mathrm{RPM})
+\right).
+\end{equation}
+This formulation matters because it makes \(V_{\mathrm{eff}}\) condition-dependent through the solved thrust level:
+\begin{align}
+v_i(\mathrm{RPM}) &= \sqrt{\frac{T_{\mathrm{tot}}(\mathrm{RPM})}{2\rho A_{\mathrm{disk}}}}, \\
+V_{\mathrm{eff}}(\mathrm{RPM}) &= V_\infty + 2v_i(\mathrm{RPM}).
+\end{align}
+The current speed-sweep plots therefore show a physically changing blown velocity rather than a low-speed value that has been frozen and merely re-plotted at other freestream speeds.
+
+The off-design results are shown in Figs.~\ref{fig:sweep-performance} and \ref{fig:sweep-operating}. The main trend is clear. The \(\delta_f=40^\circ\) branch remains the strongest pure high-lift branch in terms of \(C_{L,\max}\), peaking near \SI{5}{m/s} at about \(C_{L,\max}\approx 5.87\), but it is also the most drag-intensive branch and remains thrust-limited throughout the current sweep. The \(\delta_f=20^\circ\) branch is intermediate: it becomes feasible only in a narrower upper-speed band. The \(\delta_f=0^\circ\) branch carries most of the feasible corridor because its drag remains low enough that the re-solved RPM can cover both the lift requirement and the drag requirement over much of the mid- to high-speed range.
+
+At \SI{10}{m/s}, for example, the clean branch solves near \(\mathrm{RPM}\approx 6251\), giving \(V_{\mathrm{eff}}\approx \SI{12.38}{m/s}\) and \(v_i\approx \SI{1.19}{m/s}\). Its whole-wing \(C_{L,\max}\approx 1.82\) remains above the required \(C_L\approx 1.14\), but the branch is still marked infeasible because the thrust deficit is slightly negative under the current closure. By contrast, the \(\delta_f=20^\circ\) and \(40^\circ\) branches at \SI{10}{m/s} are no longer lift-limited at all; they are drag-limited and thrust-limited. This is exactly the kind of operating-point distinction the unified workflow was intended to reveal.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/speed_sweep/rank06_n10_d5p5_p2p2_balanced_b3/dae51/speed_sweep_performance.png}
+    \caption{Frozen-geometry DAE51 speed-sweep summary for the selected rank~6 architecture. The \(\delta_f=40^\circ\) branch retains the largest \(C_{L,\max}\), but the clean branch carries most of the feasible off-design corridor because its drag remains much lower.}
+    \label{fig:sweep-performance}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.92\linewidth]{../outputs/wing_workflow/dae51/speed_sweep/rank06_n10_d5p5_p2p2_balanced_b3/dae51/speed_sweep_operating_points.png}
+    \caption{Solved operating-point trends for the frozen DAE51 configuration. Because RPM is re-solved at every speed and flap state, both \(V_{\mathrm{eff}}\) and \(v_i\) vary with flight condition rather than being carried over from the original low-speed design point.}
+    \label{fig:sweep-operating}
+\end{figure}
 
 \section{Operating-Point Implications and Representative Motor Targeting}
 
@@ -513,11 +779,11 @@ The present project therefore supports a simple design statement: motor drop sho
 
 The present selected concept is now well enough defined to state its credible operating envelope under the current model:
 \begin{itemize}
-\item low-speed blown condition near \SI{4.36}{m/s} equivalent stall speed rather than the target \SI{4.0}{m/s},
+\item low-speed blown condition near \SI{4.44}{m/s} equivalent stall speed rather than the target \SI{4.0}{m/s},
 \item cruise at \SI{10}{m/s} with electrical power near \SI{131}{W},
 \item loiter energy near \SI{39.35}{Wh} for the current \SI{18}{min} requirement,
 \item low-speed blown velocity margin of about \SI{5.15}{m/s} relative to the Stage~1 required value,
-\item high-lift wing-only pitching moment near \(C_M=-0.90\) at the peak-lift point.
+\item high-lift wing-only pitching moment near \(C_M=-0.68\) at the peak-lift point.
 \end{itemize}
 
 This is a very useful result. The selected architecture is not energetically struggling; it is high-lift limited. In other words, the current concept is already close to the energy and propulsion regime it needs, but still short of the low-speed aerodynamic requirement.
@@ -532,6 +798,19 @@ I_{\mathrm{peak}} &\approx \SI{1.16}{A}, \\
 K_V &\approx \SI{771}{rpm/V}.
 \end{align}
 The current target band is widened heuristically to about \SIrange{655}{886}{rpm/V}. The representative local dataset currently identifies a SunnySky A2212 \SI{1000}{Kv} class motor and an \SI{8}{A} BLHeli-S ESC class as the nearest class-level matches.
+
+The motor-targeting stage computes these values from the selected Stage~1 operating point using
+\begin{align}
+P_{\mathrm{elec,peak}} &= \max(P_{\mathrm{elec,low}},P_{\mathrm{elec,cruise}})/N_p, \\
+I_{\mathrm{peak}} &= \frac{P_{\mathrm{elec,peak}}}{V_{\mathrm{batt}}}, \\
+K_{V,\mathrm{req}} &= \frac{\mathrm{RPM}_{\mathrm{low}}}{0.85 V_{\mathrm{batt}}},
+\end{align}
+with heuristic procurement targets
+\begin{align}
+P_{\mathrm{elec,target}} &= 1.25\,P_{\mathrm{elec,peak}}, \\
+I_{\mathrm{cont,target}} &= 1.25\,I_{\mathrm{peak}}.
+\end{align}
+These equations are used only to turn the aerodynamic operating point into a practical hardware search band. They are intentionally conservative because the local motor database is class-based rather than a final vendor-backed downselect.
 
 \begin{figure}[H]
     \centering
@@ -557,6 +836,8 @@ The \(10\times 5.5\times 2.2\)~in balanced architecture remains a defensible stu
 \end{itemize}
 This does not mean the concept is globally optimal. It means it is a good architecture around which to resolve the remaining aerodynamic questions.
 
+There is also a useful paper-level geometric coincidence here. For the present rectangular chord \(c=\SI{0.35}{m}\), Hawkswell et al.'s nacelle-inclusive optimum diameter scale of \(0.39c\) corresponds to about \SI{5.37}{in}, which is remarkably close to the selected \(5.5\)~in diameter.\cite{Hawkswell2022} Similarly, the current repository motor-drop choice of \(0.12c\) and the axial location \(x_p/c=-0.25\) mirror the same Cambridge practical optimum. This does not prove the selected architecture is globally optimal, but it does mean the manually retained Stage~1 concept lands in a geometry neighborhood that is independently supported by the Cambridge study.
+
 \subsection{The wing}
 
 The fixed-span geometry study suggests that the aerodynamic planform would prefer:
@@ -565,17 +846,17 @@ The fixed-span geometry study suggests that the aerodynamic planform would prefe
 \item moderate taper (\(\lambda \approx 0.62\)),
 \item modest washout (about \(-2.5^\circ\)).
 \end{itemize}
-However, the control-surface study indicates that even the current rectangular wing with aggressive blown slotted flaps only reaches \(C_{L,\max}\approx 6.00\). This has an immediate implication: if \SI{4.0}{m/s} remains a hard mission requirement, either the wing must become larger, the mass must come down, or the local high-lift system must improve further.
+However, the control-surface study indicates that even the current rectangular wing with aggressive blown slotted flaps only reaches \(C_{L,\max}\approx 5.81\). This has an immediate implication: if \SI{4.0}{m/s} remains a hard mission requirement, either the wing must become larger, the mass must come down, or the local high-lift system must improve further.
 
 Using the rectangular-wing control result,
 \begin{equation}
 S_{\mathrm{req}} \approx \frac{W}{q_\infty C_{L,\max}},
 \end{equation}
-the current \(C_{L,\max}\approx 6.0\) implies that the present \SI{5.0}{kg} airplane would require roughly
+the current \(C_{L,\max}\approx 5.81\) implies that the present \SI{5.0}{kg} airplane would require roughly
 \begin{equation}
-S_{\mathrm{req}} \approx \SI{0.83}{m^2}
+S_{\mathrm{req}} \approx \SI{0.86}{m^2}
 \end{equation}
-to hold \SI{4}{m/s}, which is about 19\% larger than the original rectangular wing and about 12\% larger than the current rank~6 Stage~3 refined wing. Conversely, keeping the original \SI{0.70}{m^2} wing but limiting the airplane to \(C_{L,\max}\approx 6.0\) implies a mass closer to \SI{4.2}{kg} if the \SI{4}{m/s} requirement is to be met. This is one of the clearest design outputs of the project.
+to hold \SI{4}{m/s}, which is about 23\% larger than the original rectangular wing and about 16\% larger than the current rank~6 Stage~3 refined wing. Conversely, keeping the original \SI{0.70}{m^2} wing but limiting the airplane to \(C_{L,\max}\approx 5.81\) implies a mass closer to \SI{4.06}{kg} if the \SI{4}{m/s} requirement is to be met. This is one of the clearest design outputs of the project.
 
 \subsection{The high-lift system}
 
@@ -588,6 +869,8 @@ The selected flap is already large and strongly integrated with the propeller la
 \end{itemize}
 This means the project has already exhausted the most obvious ``just make the flap bigger'' move. Future improvements in low-speed capability are therefore more likely to come from improved section choice, improved slot geometry, better flap kinematics, or a modest increase in wing area than from merely extending the flap further.
 
+Agrawal et al. are especially useful here because they explain why the motor-over-flap arrangement is so powerful in the first place.\cite{Agrawal2019} The flap is not only a conventional camber-increasing device. It is also the surface that receives the injected high-total-pressure jet through the slot, delays main-element wake bursting, delays flap separation, and turns the jet downward so that the vertical momentum change contributes directly to lift. That is the aerodynamic reason the present solver penalizes flap geometries that do not place enough propeller disks over the flap.
+
 \subsection{Motor height}
 
 The present motor-height trade supports a drop near \(0.08c\) to \(0.12c\). That range is consistent with the paper-backed scale from Hawkswell et al. and with the present control study. There is no strong evidence in the current results that pushing the motor much lower than that is beneficial. Indeed, the present over-drop penalty suggests that such a change would likely sharpen stall before it helps the mean lift level.
@@ -595,6 +878,16 @@ The present motor-height trade supports a drop near \(0.08c\) to \(0.12c\). That
 \subsection{Controls and trim}
 
 The current blown flap does not come for free. The wing-only pitching moment near the high-lift point is strongly negative, and the low-speed aileron authority, while still viable, is weaker than the cruise condition. The design implication is straightforward: the next aircraft-level study should not only optimize \(C_L\), but also ensure that the empennage and CG envelope can absorb the trim penalty associated with the blown slotted-flap system.
+
+\subsection{Airframe and systems integration notes}
+
+Several aircraft-level notes emerged alongside the solver development and are worth recording explicitly even though they are not yet full optimization variables.
+\begin{itemize}
+\item The wing will likely need to sit relatively far aft on the fuselage so that the propeller plane, flap system, and CG placement can coexist without excessive fuselage interference. This is a packaging and structural recommendation rather than a direct solver output.
+\item The motor mounts should remain modular. Agrawal et al. demonstrated that both motor height and motor-axis angle alter stall behavior,\cite{Agrawal2019} so a practical prototype should allow discrete changes in drop and axis angle rather than fixing one rigid mount from the outset.
+\item The present solver applies a common motor-drop geometry to propellers lying over the flap span. A more hardware-specific future design may instead lower only the most inboard propellers per side, leaving the outer leading-edge propellers on the wing centerline. That discrete installation has not yet been modeled explicitly and should therefore be treated as a build concept rather than a solved result.
+\item Low-speed stability will likely require full differential-thrust authority. The current avionics/GNC implication is that the flight computer and output expansion should support mapping each ESC independently rather than treating the propeller line as a single thrust channel.
+\end{itemize}
 
 \section{Limitations and Recommended Next Steps}
 
@@ -605,6 +898,8 @@ The present workflow is coherent, but it is not the final answer. The main limit
 \item The motor-height over-drop penalty is qualitative, not experimentally fitted.
 \item The rectangular-wing control study still uses a low-speed aileron proxy rather than a full lateral-directional model.
 \item The representative motor target stage is class-based and uses local datasets rather than a live vendor-backed search.
+\item The current whole-wing airfoil comparison compresses some of the true airfoil-to-airfoil differences because it holds propulsor layout, flap geometry, immersion logic, and blown-area fractions fixed across all candidates. It is therefore stronger as a clustering and ranking tool than as a final arbiter of very small performance gaps.
+\item The new off-design speed sweep is valuable precisely because it distinguishes lift-limited from thrust-limited branches, but it is still a frozen-geometry branch comparison rather than a full mission control-schedule optimization.
 \end{itemize}
 
 The most valuable next steps are therefore:
@@ -612,19 +907,21 @@ The most valuable next steps are therefore:
 \item replace the coarse Stage~1 propeller surrogates with measured propeller data for the candidate \(5.5\)~in and \(6.0\)~in classes,
 \item calibrate the motor-height and blown-section surrogates directly against a section data set in the spirit of Agrawal et al.,
 \item carry the flap-induced \(C_M\) burden into a whole-aircraft trim and tail-sizing study,
-\item test whether modest increases in wing area or reductions in mass are a more efficient way to reach the \SI{4.0}{m/s} requirement than pursuing still more aggressive blown lift.
+\item test whether modest increases in wing area or reductions in mass are a more efficient way to reach the \SI{4.0}{m/s} requirement than pursuing still more aggressive blown lift,
+\item if an operational preference must eventually be imposed on the Stage~1 shortlist, add a \emph{post-Pareto} weighted utility or ranking layer rather than replacing the current nondominated filter itself.
 \end{enumerate}
 
 \section{Conclusions}
 
 This project has produced a usable, coherent design workflow for a blown-wing aircraft concept. The main findings are:
 \begin{enumerate}
-\item The Stage~1 Pareto optimizer is doing useful work. It is not merely sweeping propeller parameters; it is exposing the fundamental trade between cruise power, jet authority, and geometric coverage.
-\item The selected \(10\times 5.5\times 2.2\)~in balanced architecture was retained for good reason. It sits near the low-cruise-power edge of the Pareto front while also preserving the highest momentum coefficient in the screened family, making it a strong candidate for downstream blown-wing study.
-\item Large section \(c_l\) values from blown-flap literature should not be interpreted directly as whole-aircraft \(C_L\). Once the wing is assembled at common \(\alpha\), the present selected concept reaches a more realistic \(C_{L,\max}\approx 6.0\), not 8--9.
-\item The present rectangular-wing study supports a large inboard single-slotted flap and a viable outboard aileron, but the concept still falls short of the \SI{4.0}{m/s} requirement under the current mass and wing area assumptions.
+\item The Stage~1 Pareto optimizer is doing useful work. It is not merely sweeping propeller parameters; it is exposing the fundamental trade between cruise power, jet authority, and geometric coverage. Just as importantly, it is now explicit that Stage~1 uses true three-objective nondominance rather than a hidden weighted score.
+\item The selected \(10\times 5.5\times 2.2\)~in balanced architecture was retained for good reason. It was a manual downselection from the nondominated set because it sits near the low-cruise-power edge of the Pareto front while also preserving the highest momentum coefficient in the screened family, making it a strong candidate for downstream blown-wing study.
+\item Large section \(c_l\) values from blown-flap literature should not be interpreted directly as whole-aircraft \(C_L\). Once the wing is assembled at common \(\alpha\), the present selected concept reaches a more realistic \(C_{L,\max}\approx 5.8\), not 8--9.
+\item The present rectangular-wing DAE51 study supports a large inboard single-slotted flap and a viable outboard aileron, but the concept still falls short of the \SI{4.0}{m/s} requirement under the current mass and wing area assumptions.
 \item Motors in front of flaps matter not simply because they add momentum, but because they create a jet/flap system. That system increases lift, deepens the wing-only pitching moment, and makes motor height a genuine high-lift design variable.
 \item The current motor-height trade is physically richer than the earlier bonus-factor model. It now captures both the benefit of recovering jet immersion and the degradation associated with overly aggressive motor drop.
+\item The new unified workflow is already useful. The multi-airfoil front-end preserves the comparative airfoil study, while the DAE51 deep-dive makes the control-surface, motor-height, and off-design speed-sweep outputs internally consistent. The speed sweep further shows that flap deployment is not automatically beneficial off-design: the \(\delta_f=40^\circ\) branch remains lift-rich but drag- and thrust-limited, whereas the clean branch carries most of the feasible corridor.
 \item The present operating point is not dominated by propulsion power or battery energy. The main challenge that remains is still low-speed aerodynamic capability and the trim burden that accompanies it.
 \end{enumerate}
 

@@ -9,14 +9,17 @@ import numpy as np
 
 from optimizer.core.control_surface_sizing import (
     RectangularWingControlConfig,
+    _display_airfoil_name,
     _load_selected_concept,
     _pick_flap_and_aileron,
     _selected_flap_section_polars,
+    _slugify_airfoil,
     _total_high_lift_curve_data,
     evaluate_aileron_candidate,
     evaluate_flap_candidate,
     ensure_stage3_runtime,
 )
+from optimizer.core.workflow_style import SCENARIO_COLORS, sweep_red_shades
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,7 @@ SCENARIO_DEFS: tuple[dict[str, str], ...] = (
         "margin_key": "cambridge_clean_margin_m",
         "severity_key": "overdrop_clean_severity_scalar",
         "peak_shift_key": "overdrop_clean_peak_shift_deg",
-        "color": "#1d4ed8",
+        "color": SCENARIO_COLORS["clean_blowing"],
     },
     {
         "name": "slotted_flap_blowing",
@@ -53,7 +56,7 @@ SCENARIO_DEFS: tuple[dict[str, str], ...] = (
         "margin_key": "cambridge_flap_margin_m",
         "severity_key": "overdrop_flap_severity_scalar",
         "peak_shift_key": "overdrop_flap_peak_shift_deg",
-        "color": "#d97706",
+        "color": SCENARIO_COLORS["slotted_flap_blowing"],
     },
 )
 
@@ -126,6 +129,8 @@ def _overlay_rows_for_scenario(rows: list[dict[str, Any]], scenario: str) -> lis
 def _render_metric_plot(
     rows: list[dict[str, Any]],
     output_path: Path,
+    *,
+    airfoil_name: str,
 ) -> None:
     runtime = ensure_stage3_runtime()
     plt = runtime.plt
@@ -148,7 +153,7 @@ def _render_metric_plot(
         axs[2].plot(drop_mm, alpha_peak, marker="o", linewidth=2.0, color=color, label=label)
         axs[3].plot(drop_mm, poststall_drop, marker="o", linewidth=2.0, color=color, label=label)
 
-    axs[0].set_title("CLmax vs Motor Drop")
+    axs[0].set_title(f"{_display_airfoil_name(airfoil_name)} | CLmax vs Motor Drop")
     axs[0].set_ylabel("Equivalent reference CLmax")
     axs[1].set_title("Equivalent Stall Speed vs Motor Drop")
     axs[1].set_ylabel("Equivalent stall speed [m/s]")
@@ -172,12 +177,15 @@ def _render_overlay_plot(
     overlay_rows: list[dict[str, Any]],
     cl_required: float,
     output_path: Path,
+    *,
+    airfoil_name: str,
 ) -> None:
     runtime = ensure_stage3_runtime()
     plt = runtime.plt
 
     fig, axs = plt.subplots(1, 2, figsize=(13.2, 5.3), sharey=True)
-    color_map = plt.cm.viridis(np.linspace(0.08, 0.92, 7))
+    unique_drops = sorted({float(row["prop_drop_m"]) for row in overlay_rows})
+    color_map = sweep_red_shades(len(unique_drops))
 
     for ax, scenario_def in zip(axs, SCENARIO_DEFS):
         grouped: dict[float, list[dict[str, Any]]] = {}
@@ -189,14 +197,14 @@ def _render_overlay_plot(
             cl_total = [float(row["cl_total"]) for row in rows_for_drop]
             ax.plot(alpha, cl_total, color=color, linewidth=2.0, label=f"{1000.0 * drop_m:.0f} mm drop")
 
-        ax.axhline(cl_required, color="#111827", linestyle="--", linewidth=1.0, label="Required at 4 m/s")
+        ax.axhline(cl_required, color="#4b5563", linestyle="--", linewidth=1.0, label="Required at 4 m/s")
         ax.set_xlabel("Alpha [deg]")
         ax.set_title(scenario_def["label"])
         ax.grid(True, alpha=0.25)
         ax.legend(loc="upper left", ncol=2)
 
     axs[0].set_ylabel("Equivalent wing-system CL")
-    fig.suptitle("Whole-Wing CL Curves vs Motor Drop")
+    fig.suptitle(f"{_display_airfoil_name(airfoil_name)} Whole-Wing CL Curves vs Motor Drop")
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=180, bbox_inches="tight")
@@ -206,6 +214,8 @@ def _render_overlay_plot(
 def _render_geometry_plot(
     rows: list[dict[str, Any]],
     output_path: Path,
+    *,
+    airfoil_name: str,
 ) -> None:
     runtime = ensure_stage3_runtime()
     plt = runtime.plt
@@ -217,8 +227,8 @@ def _render_geometry_plot(
 
     fig, axs = plt.subplots(1, 3, figsize=(13.3, 4.4))
 
-    axs[0].plot(drop_mm, drop_over_c, marker="o", color="#f4a261")
-    axs[0].set_title("Motor Height in Chord Coordinates")
+    axs[0].plot(drop_mm, drop_over_c, marker="o", color="#b91c1c")
+    axs[0].set_title(f"{_display_airfoil_name(airfoil_name)} | Motor Height in Chord Coordinates")
     axs[0].set_xlabel("Motor vertical drop [mm]")
     axs[0].set_ylabel(r"$\Delta z_p / c$")
     axs[0].grid(True, alpha=0.25)
@@ -300,12 +310,13 @@ def _write_summary_markdown(
     output: MotorHeightTradeOutput,
     *,
     rank: int,
+    airfoil_name: str,
     n_props: int,
     diameter_in: float,
     pitch_in: float,
 ) -> None:
     lines = [
-        f"# Motor Height Trade Study: Rank {rank}",
+        f"# Motor Height Trade Study: Rank {rank} | {_display_airfoil_name(airfoil_name)}",
         "",
         f"- Prop concept: `{n_props} x {diameter_in:.1f} x {pitch_in:.1f} in`",
         "- Scenarios compared:",
@@ -366,17 +377,55 @@ def run_motor_height_trade(
     *,
     rank: int = 6,
     blade_count_metadata: int = 3,
+    airfoil_name: str = "s1210",
+    fixed_flap_span_fraction: float | None = None,
+    fixed_flap_chord_fraction: float | None = None,
+    fixed_aileron_span_fraction: float | None = None,
+    fixed_aileron_chord_fraction: float | None = None,
     prop_drop_fraction_of_chord_values: tuple[float, ...] = (0.00, 0.04, 0.08, 0.12, 0.16, 0.20, 0.24),
     output_root: Path = Path("outputs/motor_height_trade"),
 ) -> MotorHeightTradeOutput:
-    base_config = RectangularWingControlConfig(blade_count_metadata=blade_count_metadata)
+    base_config = RectangularWingControlConfig(
+        blade_count_metadata=blade_count_metadata,
+        airfoil_name=airfoil_name.lower(),
+    )
     concept = _load_selected_concept(rank=rank, blade_count_metadata=blade_count_metadata)
-    baseline_flap, baseline_aileron, _, _ = _pick_flap_and_aileron(base_config, concept)
+    if fixed_flap_span_fraction is None or fixed_flap_chord_fraction is None:
+        baseline_flap, baseline_aileron, _, _ = _pick_flap_and_aileron(base_config, concept)
+    else:
+        baseline_flap = evaluate_flap_candidate(
+            base_config,
+            concept,
+            fixed_flap_span_fraction,
+            fixed_flap_chord_fraction,
+            base_config.max_slotted_flap_deflection_deg,
+            polar_cache={},
+        )
+        if fixed_aileron_span_fraction is None or fixed_aileron_chord_fraction is None:
+            baseline_aileron = evaluate_aileron_candidate(
+                base_config,
+                concept,
+                baseline_flap,
+                base_config.aileron_span_fraction_values[-1],
+                base_config.aileron_chord_fraction_values[-1],
+            )
+        else:
+            baseline_aileron = evaluate_aileron_candidate(
+                base_config,
+                concept,
+                baseline_flap,
+                fixed_aileron_span_fraction,
+                fixed_aileron_chord_fraction,
+            )
+        if baseline_aileron is None:
+            raise ValueError("The fixed aileron geometry is infeasible for the motor-height trade.")
 
     output_dir = output_root / (
         f"rank{concept.rank:02d}_n{concept.n_props}_d{concept.prop_diameter_in:.1f}"
         f"_p{concept.prop_pitch_in:.1f}_{concept.prop_family}_b{concept.blade_count_metadata}"
     ).replace(".", "p")
+    if base_config.airfoil_name != "s1210":
+        output_dir = output_dir / _slugify_airfoil(base_config.airfoil_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output = MotorHeightTradeOutput(
@@ -491,13 +540,14 @@ def run_motor_height_trade(
 
     _write_csv(output.summary_csv, summary_rows)
     _write_csv(output.overlay_curve_csv, overlay_rows)
-    _render_metric_plot(summary_rows, output.metric_plot)
-    _render_overlay_plot(overlay_rows, cl_required, output.overlay_plot)
-    _render_geometry_plot(summary_rows, output.geometry_plot)
+    _render_metric_plot(summary_rows, output.metric_plot, airfoil_name=base_config.airfoil_name)
+    _render_overlay_plot(overlay_rows, cl_required, output.overlay_plot, airfoil_name=base_config.airfoil_name)
+    _render_geometry_plot(summary_rows, output.geometry_plot, airfoil_name=base_config.airfoil_name)
     _write_summary_markdown(
         summary_rows,
         output,
         rank=concept.rank,
+        airfoil_name=base_config.airfoil_name,
         n_props=concept.n_props,
         diameter_in=concept.prop_diameter_in,
         pitch_in=concept.prop_pitch_in,
