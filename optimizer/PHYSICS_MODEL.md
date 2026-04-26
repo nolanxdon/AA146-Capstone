@@ -104,8 +104,15 @@ Atmosphere and constants:
 
 - Oswald efficiency:
   $$
-  e = 0.8
+  e = 0.6591
   $$
+  This is now treated as an effective drag-polar Oswald factor for the current
+  DAE51 rectangular wing, obtained by fitting
+  `CD_total ≈ CD0 + CL^2 / (pi e AR)` to a clean-wing AeroSandbox VLM +
+  NeuralFoil drag polar over the `7.5-10 m/s` cruise/loiter range. The pure
+  VLM span-efficiency result was near unity; the lower fitted value is used
+  here because the Stage 1 drag model folds lift-dependent profile drag into
+  the same quadratic term.
 - Flapped baseline section lift ceiling before blowing:
   $$
   C_{L,\max,\mathrm{flapped}} = 2.2

@@ -1,2 +1,2 @@
 n_props,prop_diameter_in,prop_pitch_ratio,prop_family,fixed_wing_span_m,fixed_wing_chord_m,fixed_main_airfoil,fixed_total_mass_kg,seed_low_speed_rpm,seed_cruise_rpm,refine_variables,material_model,status
-10,5.5,0.4,balanced,2.0,0.35,DAE51,5.0,9695.8,9564.5,"horizontal_tail_area,horizontal_tail_AR,horizontal_tail_taper,vertical_tail_area,vertical_tail_AR,vertical_tail_taper,tail_arm,tail_incidence",NGX250 foam density 25.0 kg/m^3,QUEUED_FOR_TAIL_REFINEMENT
+10,5.5,0.4,balanced,2.0,0.35,DAE51,5.0,10062.0,9919.9,"horizontal_tail_area,horizontal_tail_AR,horizontal_tail_taper,vertical_tail_area,vertical_tail_AR,vertical_tail_taper,tail_arm,tail_incidence",NGX250 foam density 25.0 kg/m^3,QUEUED_FOR_TAIL_REFINEMENT

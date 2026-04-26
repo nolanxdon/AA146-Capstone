@@ -304,6 +304,52 @@ T_{\mathrm{tot}} \ge \max\!\left(\gamma_T D_{\mathrm{low}},\; T_{\mathrm{req}}(V
 \end{equation}
 where \(\gamma_T\) is the low-speed thrust margin factor. This is the key mechanism that prevents the optimizer from selecting an architecture that produces a large jet but not enough total thrust.
 
+\subsection{Effective Oswald-factor calibration for the rectangular DAE51 wing}
+
+The repository's Stage~1 drag model uses the standard induced-drag closure
+\begin{equation}
+K = \frac{1}{\pi e AR},
+\end{equation}
+inside a concept-level drag polar of the form
+\begin{equation}
+C_{D,\mathrm{tot}} \approx C_{D0} + K C_L^2.
+\end{equation}
+For the present rectangular wing,
+\begin{equation}
+AR = \frac{b^2}{S} = \frac{b^2}{bc} = \frac{b}{c} = 5.714.
+\end{equation}
+The earlier value \(e=0.8\) was a generic handbook placeholder. It has now been replaced by an implementation-matched effective value calibrated to the current DAE51 wing.
+
+The calibration procedure uses a clean rectangular \SI{2.0}{m} by \SI{0.35}{m} wing built in AeroSandbox VLM together with DAE51 section drag from NeuralFoil. At each cruise/loiter speed, the section Reynolds number is
+\begin{equation}
+Re = \frac{\rho V c}{\mu}.
+\end{equation}
+For each sampled angle of attack on the pre-stall branch, the clean-wing total drag coefficient is assembled as
+\begin{equation}
+C_{D,\mathrm{tot}}(\alpha) =
+C_{D,\mathrm{profile}}(\alpha) + C_{D,\mathrm{induced}}(\alpha),
+\end{equation}
+with \(C_{D,\mathrm{profile}}\) taken from the DAE51 NeuralFoil polar and \(C_{D,\mathrm{induced}}\) taken from the rectangular-wing VLM result. The resulting clean-wing drag polar is then fit in least-squares form as
+\begin{equation}
+C_{D,\mathrm{tot}} \approx C_{D0,\mathrm{fit}} + K_{\mathrm{fit}} C_L^2,
+\end{equation}
+so that the effective Oswald factor follows from
+\begin{equation}
+e_{\mathrm{eff}} = \frac{1}{\pi AR K_{\mathrm{fit}}}.
+\end{equation}
+
+This distinction matters. If one computes a pure VLM span-efficiency check directly from the induced drag alone,
+\begin{equation}
+e_{\mathrm{span}} = \frac{C_L^2}{\pi AR C_{D_i}},
+\end{equation}
+the present rectangular wing gives a value close to unity, as expected for a clean untwisted wing in a VLM setting. However, the Stage~1 repository model does not isolate pure span efficiency; it uses a single quadratic term to absorb both induced drag and the lift-dependent growth of the clean-wing total drag polar. For that reason the quantity needed by the Stage~1 model is the fitted \(e_{\mathrm{eff}}\), not the idealized \(e_{\mathrm{span}}\).
+
+Across the \SIrange{7.5}{10.0}{m/s} cruise/loiter range, the DAE51 rectangular-wing fit produced
+\begin{equation}
+e_{\mathrm{eff}} \approx 0.659.
+\end{equation}
+This is the value now used in the repository. It is therefore more wing-specific than the earlier handbook placeholder, while still remaining faithful to the simple Stage~1 polar structure.
+
 \subsection{RPM closure and mass closure}
 
 RPM is not treated as a free outer-loop design variable. Instead, the solver finds the minimum RPM that closes the low-speed and cruise conditions by bisection on the residuals

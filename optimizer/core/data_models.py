@@ -33,7 +33,7 @@ class Stage1MissionConfig:
     speed_of_sound_mps: float = 343.0        # ISA sea level at 15°C; ICAO Doc 7488/3
 
     # ---------------- Aero constants ----------------
-    oswald_e: float = 0.8                    # Raymer "Aircraft Design" 6th ed. Table 12.6: e ≈ 0.75-0.85 for untwisted rectangular/mildly-tapered wings; 0.8 is conservative mid-range
+    oswald_e: float = 0.6591                 # Effective Oswald factor for the 2.0 m x 0.35 m DAE51 rectangular wing, fit from an AeroSandbox VLM + NeuralFoil clean-wing drag polar over the 7.5-10 m/s cruise/loiter range
     clmax_section_flapped: float = 2.2       # Raymer 6th ed. Ch. 12: plain flap adds ΔCLmax ≈ 0.8 above clean baseline; 1.4 + 0.8 = 2.2; consistent with thin-airfoil flap theory (Glauert 1926)
     cl_section_ceiling_flapped: float = 2.0  # enforce the wing-system working ceiling; conservative cap below section CLmax to account for 3-D and installation losses
     clmax_section_clean: float = 1.4         # Abbott & Von Doenhoff "Theory of Wing Sections" (1959): NACA 4-digit profiles at Re ≈ 5×10⁵ give CLmax ≈ 1.3-1.5; 1.4 is a reasonable mid-estimate

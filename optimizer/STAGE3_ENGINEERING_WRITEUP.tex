@@ -23,7 +23,7 @@
 \maketitle
 
 \begin{abstract}
-This document records the current Stage~3 fixed-wing tail refinement for the AA146 distributed-propulsion aircraft. Stage~3 freezes the Stage~1/2 propulsion, main-wing, airfoil, flap, and aileron selections. It sizes the stabilizer planform and tail arm for cruise trim, cruise drag, mass, static margin, and tail-volume constraints, then sizes the elevator and rudder chord fractions for slow-flight control authority. The present recommended configuration uses 10 propellers of diameter \SI{5.50}{in}, the DAE51 main airfoil, a horizontal tail span of \SI{0.498}{m}, and a vertical tail height of \SI{0.234}{m}. The resulting Stage~3 built mass is \SI{2.434}{kg}, with \SI{0.033}{kg} of added tail foam mass, cruise electrical power of \SI{113.4}{W}, and low-speed electrical power of \SI{174.3}{W}.
+This document records the current Stage~3 fixed-wing tail refinement for the AA146 distributed-propulsion aircraft. Stage~3 freezes the Stage~1/2 propulsion, main-wing, airfoil, flap, and aileron selections. It sizes the stabilizer planform and tail arm for cruise trim, cruise drag, mass, static margin, and tail-volume constraints, then sizes the elevator and rudder chord fractions for slow-flight control authority. The present recommended configuration uses 10 propellers of diameter \SI{5.50}{in}, the DAE51 main airfoil, a horizontal tail span of \SI{0.500}{m}, and a vertical tail height of \SI{0.238}{m}. The resulting Stage~3 built mass is \SI{2.480}{kg}, with \SI{0.034}{kg} of added tail foam mass, cruise electrical power of \SI{131.0}{W}, and low-speed electrical power of \SI{196.2}{W}.
 \end{abstract}
 
 \section*{Nomenclature}
@@ -181,7 +181,7 @@ T_{\mathrm{blown}} &= \max(T_{D,\mathrm{slow}}, T_{V_{\mathrm{eff}}}), \\
 \Delta D_{\mathrm{add}} &= \max(0, T_{\mathrm{blown}} - D_{\mathrm{natural,slow}}), \\
 D_{\mathrm{steady,slow}} &= D_{\mathrm{natural,slow}} + \Delta D_{\mathrm{add}}.
 \end{align}
-For this design, the natural slow-flight drag is \SI{10.234}{N}, the propeller thrust needed by the blown-lift condition is \SI{10.740}{N}, and the added-drag target is \SI{0.506}{N}. This number should be treated as the first sizing target for airbrakes, spoilerons, deployable plates, or other high-drag devices.
+For this design, the natural slow-flight drag is \SI{11.213}{N}, the propeller thrust needed by the blown-lift condition is \SI{11.775}{N}, and the added-drag target is \SI{0.562}{N}. This number should be treated as the first sizing target for airbrakes, spoilerons, deployable plates, or other high-drag devices.
 
 \subsection{Performance sweeps}
 The drag and power sweep figure is not part of the optimizer objective; it is a diagnostic output for the final ranked design. Velocity sweeps solve the angle of attack needed to support aircraft weight at each speed, then evaluate profile drag, induced drag, tail drag, fuselage drag, and propeller power. Angle-of-attack sweeps hold speed fixed and vary incidence. Both the clean cruise and flaps-down slow-flight configurations are plotted.
@@ -221,19 +221,19 @@ Main wing span & \(b\) & \SI{2.000}{m} \\
 Main wing chord & \(c\) & \SI{0.350}{m} \\
 Main wing incidence & \(i_w\) & \SI{0.000}{deg} \\
 Propeller axial position & \(x_p\) & \SI{-0.0875}{m} \\
-Horizontal tail span & \(b_h\) & \SI{0.498}{m} \\
-Horizontal tail root chord & \(c_{r,h}\) & \SI{0.214}{m} \\
-Horizontal tail tip chord & \(c_{t,h}\) & \SI{0.118}{m} \\
-Horizontal tail taper & \(\lambda_h\) & 0.550 \\
-Horizontal tail incidence & \(i_h\) & \SI{-5.175}{deg} \\
+Horizontal tail span & \(b_h\) & \SI{0.500}{m} \\
+Horizontal tail root chord & \(c_{r,h}\) & \SI{0.187}{m} \\
+Horizontal tail tip chord & \(c_{t,h}\) & \SI{0.146}{m} \\
+Horizontal tail taper & \(\lambda_h\) & 0.779 \\
+Horizontal tail incidence & \(i_h\) & \SI{-5.164}{deg} \\
 Elevator chord fraction & \(c_e/c_h\) & 0.220 \\
-Vertical tail height & \(b_v\) & \SI{0.234}{m} \\
-Vertical tail root chord & \(c_{r,v}\) & \SI{0.208}{m} \\
-Vertical tail tip chord & \(c_{t,v}\) & \SI{0.200}{m} \\
-Vertical tail taper & \(\lambda_v\) & 0.961 \\
+Vertical tail height & \(b_v\) & \SI{0.238}{m} \\
+Vertical tail root chord & \(c_{r,v}\) & \SI{0.267}{m} \\
+Vertical tail tip chord & \(c_{t,v}\) & \SI{0.147}{m} \\
+Vertical tail taper & \(\lambda_v\) & 0.550 \\
 Vertical tail incidence & \(i_v\) & \SI{0.000}{deg} \\
-Rudder chord fraction & \(c_r/c_v\) & 0.455 \\
-Tail arm & \(l_t\) & \SI{1.483}{m} \\
+Rudder chord fraction & \(c_r/c_v\) & 0.439 \\
+Tail arm & \(l_t\) & \SI{1.468}{m} \\
 \bottomrule
 \end{tabular}
 \caption{Final Stage~3 aircraft dimensions.}
@@ -268,19 +268,19 @@ Tail arm & \(l_t\) & \SI{1.483}{m} \\
 \toprule
 Metric & Value & Comment \\
 \midrule
-Stage~1/2 built mass & \SI{2.402}{kg} & inherited baseline \\
+Stage~1/2 built mass & \SI{2.446}{kg} & inherited baseline \\
 Horizontal tail foam mass & \SI{0.019}{kg} & NGX250, geometry-derived \\
-Vertical tail foam mass & \SI{0.013}{kg} & NGX250, geometry-derived \\
-Total tail foam mass & \SI{0.033}{kg} & added during sizing \\
-Stage~3 built mass & \SI{2.434}{kg} & baseline plus tail foam \\
-Mass margin & \SI{2.566}{kg} & relative to \SI{5.0}{kg} limit \\
+Vertical tail foam mass & \SI{0.014}{kg} & NGX250, geometry-derived \\
+Total tail foam mass & \SI{0.034}{kg} & added during sizing \\
+Stage~3 built mass & \SI{2.480}{kg} & baseline plus tail foam \\
+Mass margin & \SI{2.520}{kg} & relative to \SI{5.0}{kg} limit \\
 CG location & \SI{0.125}{m} & from wing leading edge \\
 CG fraction MAC & 35.61\% & based on rectangular MAC \\
 Neutral point & \SI{0.170}{m} & proxy stability model \\
 Static margin & 0.131 MAC & target 0.131 MAC achieved \\
 Horizontal tail volume & 0.500 & range 0.500--0.950 \\
-Vertical tail volume & 0.051 & range 0.035--0.085 \\
-VLM \(C_{m,\alpha}\) & -0.01000/deg & negative is statically stable \\
+Vertical tail volume & 0.052 & range 0.035--0.085 \\
+VLM \(C_{m,\alpha}\) & -0.00993/deg & negative is statically stable \\
 \bottomrule
 \end{tabular}
 \caption{Mass and static-stability closure for the selected Stage~3 geometry.}
@@ -308,15 +308,15 @@ Yaw/rudder & \(C_n=0.055\) & \(C_n=0.055\) & 0.0\% \\
 Metric & Low speed & Cruise \\
 \midrule
 Freestream speed & \SI{4.00}{m/s} & \SI{10.00}{m/s} \\
-Total drag & \SI{10.740}{N} & \SI{5.204}{N} \\
-Natural airframe drag & \SI{10.234}{N} & -- \\
-Added drag required & \SI{0.506}{N} & -- \\
-Slow drag minus cruise drag & \SI{5.536}{N} & -- \\
+Total drag & \SI{11.775}{N} & \SI{6.041}{N} \\
+Natural airframe drag & \SI{11.213}{N} & -- \\
+Added drag required & \SI{0.562}{N} & -- \\
+Slow drag minus cruise drag & \SI{5.734}{N} & -- \\
 Fuselage drag increment & \SI{0.108}{N} & \SI{0.674}{N} \\
-Electrical power & \SI{174.27}{W} & \SI{113.38}{W} \\
-RPM & \num{9750} & \num{9182} \\
-Required/actual blown velocity & \SI{6.179}{m/s} / \SI{14.696}{m/s} & -- \\
-Cruise \(C_L/C_D/L/D\) & -- & 1.144 / 0.1214 / 9.42 \\
+Electrical power & \SI{196.19}{W} & \SI{130.99}{W} \\
+RPM & \num{10116} & \num{9561} \\
+Required/actual blown velocity & \SI{6.179}{m/s} / \SI{15.199}{m/s} & -- \\
+Cruise \(C_L/C_D/L/D\) & -- & 1.144 / 0.1409 / 8.12 \\
 \bottomrule
 \end{tabular}
 \caption{Low-speed and cruise performance after Stage~3 tail sizing.}
@@ -329,13 +329,13 @@ Cruise \(C_L/C_D/L/D\) & -- & 1.144 / 0.1214 / 9.42 \\
 \toprule
 Drag component & Clean cruise [N] & Flaps-down slow [N] \\
 \midrule
-Main wing profile / Stage~1 baseline & 0.528 & 10.084 \\
-Main wing induced & 3.905 & included in baseline \\
-Horizontal tail & 0.062 & 0.028 \\
-Vertical tail & 0.035 & 0.014 \\
+Main wing profile / Stage~1 baseline & 0.528 & 11.062 \\
+Main wing induced & 4.739 & included in baseline \\
+Horizontal tail & 0.063 & 0.029 \\
+Vertical tail & 0.036 & 0.015 \\
 Fuselage & 0.674 & 0.108 \\
-Added drag / airbrakes & 0.000 & 0.506 \\
-Total & 5.204 & 10.740 \\
+Added drag / airbrakes & 0.000 & 0.562 \\
+Total & 6.041 & 11.775 \\
 \bottomrule
 \end{tabular}
 \caption{Drag buildup for the clean cruise and flaps-down slow-flight sizing points.}
@@ -370,8 +370,8 @@ Approach speed & \(V_A\) & \SI{5.00}{m/s} \\
 Flap deflection & \(\delta_f\) & \SI{40.0}{deg} \\
 Angle of attack & \(\alpha_A\) & \SI{13.06}{deg} \\
 Required lift coefficient & \(C_L\) & 4.549 \\
-Approach drag & \(D_A\) & \SI{44.901}{N} \\
-Required thrust & \(T_A\) & \SI{39.775}{N} \\
+Approach drag & \(D_A\) & \SI{45.291}{N} \\
+Required thrust & \(T_A\) & \SI{40.165}{N} \\
 Electrical power & \(P_A\) & \SI{558.85}{W} \\
 Throttle estimate & -- & 100.0\% \\
 Propulsion feasible & -- & 0 \\
@@ -388,9 +388,9 @@ Sink rate & -- & \SI{0.523}{m/s} \\
 \section{Trim and Aerodynamic Verification}
 The final geometry is checked with AeroSandbox VLM at cruise. The trim solver adjusts aircraft angle of attack and horizontal-tail incidence to close lift and pitching moment. The final residuals are
 \begin{equation}
-\Delta L = \SI{-0.000030}{N}, \qquad \Delta C_M = -0.000000.
+\Delta L = \SI{-0.000029}{N}, \qquad \Delta C_M = -0.000000.
 \end{equation}
-The trimmed cruise angle of attack is \SI{12.015}{deg}, and the horizontal-tail incidence is \SI{-5.175}{deg}. The selected result has warning status \texttt{approach\_throttle\_saturated}.
+The trimmed cruise angle of attack is \SI{12.014}{deg}, and the horizontal-tail incidence is \SI{-5.164}{deg}. The selected result has warning status \texttt{approach\_throttle\_saturated}.
 
 \begin{figure}[H]
 \centering
@@ -401,7 +401,7 @@ The trimmed cruise angle of attack is \SI{12.015}{deg}, and the horizontal-tail 
 
 \section{Engineering Interpretation and Open Items}
 \begin{enumerate}[leftmargin=*]
-\item The tail geometry meets the active tail-volume and static-margin targets while adding only \SI{0.033}{kg} of NGX250 foam mass.
+\item The tail geometry meets the active tail-volume and static-margin targets while adding only \SI{0.034}{kg} of NGX250 foam mass.
 \item The propeller drawing now uses the Stage~2 propeller centers and the Stage~3 YAML axial-location parameter. This makes the layout plot a geometry check rather than a schematic with a hard-coded propeller station.
 \item The fuselage model has been updated to a \SI{170}{mm} by \SI{130}{mm} cross-section. The equivalent drag area remains a concept-level parasite-drag surrogate and should eventually be replaced by a measured or CFD-derived fuselage drag polar.
 \item The slow-flight lift margin is large because Stage~3 consumes the Stage~1/2 flap-down blown \(C_{L,\max}\) directly. This is consistent with the current user requirement, but it also means the high-lift model remains one of the dominant validation risks.

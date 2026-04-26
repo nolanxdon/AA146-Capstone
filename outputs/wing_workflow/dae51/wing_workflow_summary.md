@@ -10,9 +10,9 @@
 ## Key outputs
 
 - Airfoil front-end summary: [README.md](airfoil_frontend/README.md)
-- DAE51 control summary: [control_surface_summary.md](dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/control_surface_summary.md)
-- DAE51 motor-height summary: [motor_height_trade_summary.md](dae51/motor_height_trade/rank06_n10_d5p5_p2p2_balanced_b3/dae51/motor_height_trade_summary.md)
-- DAE51 speed-sweep summary: [speed_sweep_summary.md](dae51/speed_sweep/rank06_n10_d5p5_p2p2_balanced_b3/dae51/speed_sweep_summary.md)
+- DAE51 control summary: [control_surface_summary.md](dae51/control_surface_sizing/rank01_n10_d5p5_p2p2_balanced_b3/dae51/control_surface_summary.md)
+- DAE51 motor-height summary: [motor_height_trade_summary.md](dae51/motor_height_trade/rank01_n10_d5p5_p2p2_balanced_b3/dae51/motor_height_trade_summary.md)
+- DAE51 speed-sweep summary: [speed_sweep_summary.md](dae51/speed_sweep/rank01_n10_d5p5_p2p2_balanced_b3/dae51/speed_sweep_summary.md)
 
 ## Frozen design passed downstream
 

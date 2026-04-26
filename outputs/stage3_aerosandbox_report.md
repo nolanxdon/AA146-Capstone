@@ -40,38 +40,38 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 | Main wing incidence | 0.000 deg |
 | Propeller axial x position | -0.087 m |
 | Fuselage width x height | 170 mm x 130 mm |
-| Horizontal tail span | 0.498 m |
-| Horizontal tail root chord | 0.214 m |
-| Horizontal tail tip chord | 0.118 m |
-| Horizontal tail incidence | -5.175 deg |
+| Horizontal tail span | 0.500 m |
+| Horizontal tail root chord | 0.187 m |
+| Horizontal tail tip chord | 0.146 m |
+| Horizontal tail incidence | -5.164 deg |
 | Elevator chord fraction | 0.220 chord |
-| Vertical tail height/span | 0.234 m |
-| Vertical tail root chord | 0.208 m |
-| Vertical tail tip chord | 0.200 m |
+| Vertical tail height/span | 0.238 m |
+| Vertical tail root chord | 0.267 m |
+| Vertical tail tip chord | 0.147 m |
 | Vertical tail incidence | 0.000 deg |
-| Rudder chord fraction | 0.455 chord |
-| Tail arm | 1.483 m |
+| Rudder chord fraction | 0.439 chord |
+| Tail arm | 1.468 m |
 | Static margin | 0.131 MAC |
 | H-tail volume range / actual | 0.500-0.950 / 0.500 |
-| V-tail volume range / actual | 0.035-0.085 / 0.051 |
+| V-tail volume range / actual | 0.035-0.085 / 0.052 |
 | Slow pitch control authority / target | 0.563 / 0.180 Cm |
 | Slow yaw control authority / target | 0.055 / 0.055 Cn |
-| Stage 3 built mass | 2.434 kg |
-| Tail foam mass | 0.033 kg |
+| Stage 3 built mass | 2.480 kg |
+| Tail foam mass | 0.034 kg |
 | Stage 1/2 no-flap CLmax | 1.418 |
 | Stage 1/2 flap-only CLmax | 1.876 |
 | Stage 1/2 clean blown CLmax | 5.507 |
 | Stage 1/2 flap-down blown CLmax | 5.810 |
 | Slow-flight flap-down CLmax, unblown | 1.876 |
 | Slow-flight flap-down CLmax, blown | 5.810 |
-| Slow-flight lift margin | 420.7% |
+| Slow-flight lift margin | 456.4% |
 | Cruise fuselage drag | 0.674 N |
-| Cruise power | 113.38 W |
-| Slow-flight power | 174.27 W |
-| Slow-flight natural drag before added drag | 10.234 N |
-| Slow-flight added drag required | 0.506 N |
-| Slow-flight steady total drag | 10.740 N |
-| Slow-flight steady drag minus cruise drag | 5.536 N |
+| Cruise power | 130.99 W |
+| Slow-flight power | 196.19 W |
+| Slow-flight natural drag before added drag | 11.213 N |
+| Slow-flight added drag required | 0.562 N |
+| Slow-flight steady total drag | 11.775 N |
+| Slow-flight steady drag minus cruise drag | 5.734 N |
 | Approach target angle | 6.00 deg below horizontal |
 | Approach speed | 5.00 m/s |
 | Approach elevator trim | 6.59 deg |
@@ -81,13 +81,13 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 
 | Component | Clean cruise drag [N] | Flaps-down slow-flight drag [N] |
 | --- | ---: | ---: |
-| Main wing profile / Stage 1 flap baseline | 0.528 | 10.084 |
-| Main wing induced | 3.905 | Included in Stage 1 baseline |
-| Horizontal tail | 0.062 | 0.028 |
-| Vertical tail | 0.035 | 0.014 |
+| Main wing profile / Stage 1 flap baseline | 0.528 | 11.062 |
+| Main wing induced | 4.739 | Included in Stage 1 baseline |
+| Horizontal tail | 0.063 | 0.029 |
+| Vertical tail | 0.036 | 0.015 |
 | Fuselage | 0.674 | 0.108 |
-| Added drag required to cancel blown-lift thrust | 0.000 | 0.506 |
-| Total | 5.204 | 10.740 |
+| Added drag required to cancel blown-lift thrust | 0.000 | 0.562 |
+| Total | 6.041 | 11.775 |
 
 ## Approach Estimate
 
@@ -96,7 +96,7 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 | Target descent angle | 6.00 deg |
 | Flap deflection | 40.0 deg |
 | Approach alpha | 13.06 deg |
-| Required thrust | 39.775 N |
+| Required thrust | 40.165 N |
 | Electrical power | 558.85 W |
 | RPM | 14000 rpm |
 | Throttle estimate | 100.0% |
@@ -120,4 +120,4 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 
 | Rank | Props | Cruise W | Slow W | H-tail span | V-tail height | Mass margin | Static margin |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 10 x 5.5 in balanced | 113.38 | 174.27 | 0.498 | 0.234 | 2.566 | 0.131 |
+| 1 | 10 x 5.5 in balanced | 130.99 | 196.19 | 0.500 | 0.238 | 2.520 | 0.131 |
