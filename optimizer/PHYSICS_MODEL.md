@@ -535,11 +535,11 @@ The current clearances are:
   $$
 - fuselage-to-inboard-prop edge clearance:
   $$
-  c_f = 1.0 \ \mathrm{in}
+  c_f = 0.5 \ \mathrm{in}
   $$
 - inter-prop edge clearance:
   $$
-  c_p = 1.0 \ \mathrm{in}
+  c_p = 0.4 \ \mathrm{in}
   $$
 - wingtip margin:
   $$

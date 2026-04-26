@@ -134,7 +134,8 @@ def blown_span_fraction(config: Stage1MissionConfig, candidate: Stage1Candidate)
     if not positions:
         return 0.0
 
-    blown_width = config.k_span_expansion * candidate.prop_diameter_m
+    k_span_expansion = getattr(config, "k_span_expansion", getattr(config, "k_span_e8xpansion", 0.8))
+    blown_width = k_span_expansion * candidate.prop_diameter_m
     radius_blow = blown_width / 2.0
 
     intervals: list[tuple[float, float]] = []

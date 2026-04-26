@@ -117,21 +117,35 @@ def validate_outputs(
             f"Stage 2 report row count {len(stage2_rows)} does not match Pareto row count {len(pareto_rows)}."
         )
 
-    if stage2_rows and stage3_queue_rows and len(stage3_queue_rows) != len(stage2_rows):
-        issues.append(
-            f"Stage 3 queue row count {len(stage3_queue_rows)} does not match Stage 2 row count {len(stage2_rows)}."
+    def stage2_key(row: dict[str, str]) -> tuple[int, float, float, str]:
+        return (
+            int(float(row["n_props"])),
+            round(float(row["prop_diameter_in"]), 3),
+            round(float(row["prop_pitch_ratio"]), 3),
+            row["prop_family"],
         )
 
-    if stage2_rows and stage3_result_rows and len(stage3_result_rows) != len(stage2_rows):
+    if stage3_queue_rows and stage3_result_rows and len(stage3_queue_rows) != len(stage3_result_rows):
         issues.append(
-            f"Stage 3 result row count {len(stage3_result_rows)} does not match Stage 2 row count {len(stage2_rows)}."
+            f"Stage 3 queue row count {len(stage3_queue_rows)} does not match Stage 3 result row count {len(stage3_result_rows)}."
         )
+
+    if stage2_rows and stage3_result_rows:
+        stage2_keys = {stage2_key(row) for row in stage2_rows}
+        for idx, row in enumerate(stage3_result_rows, start=1):
+            if row["status"] != "SUCCESS":
+                continue
+            if stage2_key(row) not in stage2_keys:
+                issues.append(f"Stage 3 row {idx} does not correspond to any Stage 2 propulsion row.")
 
     for idx, row in enumerate(stage3_result_rows, start=1):
         if row["status"] != "SUCCESS":
             issues.append(f"Stage 3 row {idx} has non-success status {row['status']}.")
             continue
-        for field in ["top_view_png", "three_view_png", "wireframe_png", "polar_png", "mesh_npz"]:
+        artifact_fields = ["top_view_png", "three_view_png", "wireframe_png", "polar_png", "mesh_npz"]
+        if "render_3d_png" in row:
+            artifact_fields.append("render_3d_png")
+        for field in artifact_fields:
             if not Path(row[field]).exists():
                 issues.append(f"Stage 3 row {idx} is missing artifact {row[field]}.")
 

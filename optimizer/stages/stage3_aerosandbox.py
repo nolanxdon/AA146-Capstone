@@ -6,13 +6,23 @@ from pathlib import Path
 from optimizer.core.data_models import Stage1MissionConfig
 from optimizer.core.stage3_refinement import (
     STAGE3_GALLERY_MD,
+    STAGE3_CONSTRAINTS_YAML,
+    STAGE3_ENGINEERING_TEX,
+    STAGE3_READABLE_RESULTS_MD,
+    STAGE3_REPORT_MD,
     STAGE3_TRADE_PLOT,
     STAGE3_VISUAL_DIR,
+    Stage3SizingConfig,
     candidate_key,
     load_csv_rows,
+    load_selected_wing_context,
     load_stage1_lookup,
+    load_stage3_sizing_config,
     refine_stage3_candidate,
     write_gallery,
+    write_stage3_engineering_tex,
+    write_stage3_readable_results,
+    write_stage3_report,
     write_trade_space_plot,
 )
 
@@ -22,88 +32,270 @@ STAGE1_PARETO_INPUT_CSV = Path("outputs/stage1_pareto_front.csv")
 QUEUE_OUTPUT_CSV = Path("outputs/stage3_aerosandbox_queue.csv")
 RESULTS_OUTPUT_CSV = Path("outputs/stage3_aerosandbox_results.csv")
 TOP_RESULTS_OUTPUT_CSV = Path("outputs/stage3_aerosandbox_top_designs.csv")
+
 STAGE3_FIELDNAMES = [
     "n_props",
     "prop_diameter_in",
     "prop_pitch_ratio",
     "prop_family",
-    "baseline_span_m",
-    "baseline_chord_m",
-    "baseline_low_speed_mps",
-    "baseline_cruise_speed_mps",
+    "fixed_wing_span_m",
+    "fixed_wing_chord_m",
+    "fixed_main_airfoil",
+    "fixed_total_mass_kg",
     "seed_low_speed_rpm",
     "seed_cruise_rpm",
     "refine_variables",
+    "material_model",
     "status",
 ]
+
 STAGE3_RESULTS_FIELDNAMES = [
     "rank",
     "status",
+    "design_warnings",
     "n_props",
     "prop_diameter_in",
     "prop_pitch_ratio",
     "prop_family",
     "seed_low_speed_rpm",
     "seed_cruise_rpm",
-    "blown_span_fraction",
-    "baseline_required_veff_mps",
-    "baseline_actual_veff_mps",
-    "baseline_low_speed_power_w",
-    "baseline_cruise_power_w",
-    "baseline_cruise_drag_n",
-    "optimized_root_chord_m",
-    "optimized_tip_chord_m",
-    "optimized_taper",
-    "optimized_wing_area_m2",
-    "optimized_mac_m",
-    "optimized_aspect_ratio",
-    "optimized_washout_deg",
-    "optimized_flap_span_fraction",
-    "optimized_flap_chord_fraction",
-    "recommended_flap_deflection_deg",
-    "optimized_aileron_span_fraction",
-    "optimized_aileron_chord_fraction",
-    "recommended_aileron_deflection_deg",
-    "horizontal_tail_area_m2",
-    "vertical_tail_area_m2",
-    "tail_arm_m",
+    "selected_airfoil",
+    "tail_airfoil",
+    "wing_context_source",
+    "wing_span_m",
+    "wing_chord_m",
+    "wing_area_m2",
+    "wing_aspect_ratio",
+    "main_wing_incidence_deg",
+    "main_wing_washout_deg",
+    "prop_axial_location_fraction_of_chord",
+    "prop_axial_x_m",
+    "fuselage_width_m",
+    "fuselage_height_m",
+    "flap_span_fraction",
+    "flap_chord_fraction",
+    "flap_deflection_slow_deg",
+    "aileron_span_fraction",
+    "aileron_chord_fraction",
+    "htail_span_m",
+    "htail_root_chord_m",
+    "htail_tip_chord_m",
+    "htail_area_m2",
+    "htail_aspect_ratio",
+    "htail_taper",
+    "htail_incidence_deg",
     "elevator_chord_fraction",
+    "elevator_max_deflection_deg",
+    "target_slow_pitch_control_cm",
+    "slow_pitch_control_cm_authority",
+    "slow_pitch_control_margin_percent",
+    "elevator_trim_cruise_deg",
+    "vtail_span_m",
+    "vtail_root_chord_m",
+    "vtail_tip_chord_m",
+    "vtail_area_m2",
+    "vtail_aspect_ratio",
+    "vtail_taper",
+    "vertical_tail_incidence_deg",
     "rudder_chord_fraction",
-    "refined_low_speed_cl_required",
-    "refined_low_speed_required_veff_mps",
-    "refined_low_speed_power_proxy_w",
-    "propulsor_veff_margin_mps",
+    "rudder_max_deflection_deg",
+    "target_slow_yaw_control_cn",
+    "slow_yaw_control_cn_authority",
+    "slow_yaw_control_margin_percent",
+    "tail_arm_m",
+    "horizontal_tail_volume",
+    "vertical_tail_volume",
+    "horizontal_tail_volume_min",
+    "horizontal_tail_volume_max",
+    "vertical_tail_volume_min",
+    "vertical_tail_volume_max",
+    "cg_x_m",
+    "cg_percent_mac",
+    "neutral_point_x_m",
+    "static_margin_mac",
+    "vlm_cm_alpha_per_deg",
+    "main_wing_foam_mass_kg",
+    "htail_foam_mass_kg",
+    "vtail_foam_mass_kg",
+    "total_tail_foam_mass_kg",
+    "stage1_total_built_mass_kg",
+    "stage3_total_built_mass_kg",
+    "mass_budget_margin_kg",
+    "blown_span_fraction",
+    "clmax_source",
+    "clmax_curve_source",
+    "no_flap_clmax",
+    "flap_only_clmax",
+    "clean_blowing_clmax",
+    "flap_down_blown_clmax",
+    "no_flap_clmax_alpha_deg",
+    "flap_only_clmax_alpha_deg",
+    "clean_blowing_clmax_alpha_deg",
+    "flap_down_blown_clmax_alpha_deg",
+    "fallback_slotted_flap_section_clmax",
+    "slow_flight_stall_margin_factor",
+    "slow_flight_unblown_clmax",
+    "slow_flight_blown_clmax",
+    "slow_flight_design_unblown_clmax",
+    "slow_flight_design_blown_clmax",
+    "low_speed_required_veff_mps",
+    "low_speed_actual_veff_mps",
+    "low_speed_drag_n",
+    "low_speed_natural_drag_n",
+    "low_speed_added_drag_required_n",
+    "low_speed_drag_delta_vs_cruise_n",
+    "low_speed_blown_lift_thrust_n",
+    "low_speed_stage1_baseline_drag_n",
+    "low_speed_htail_drag_n",
+    "low_speed_vtail_drag_n",
+    "low_speed_fuselage_drag_n",
+    "slow_flight_lift_available_n",
+    "slow_flight_lift_target_n",
+    "slow_flight_lift_margin_n",
+    "slow_flight_lift_margin_percent",
+    "slow_flight_equiv_stall_speed_mps",
+    "low_speed_power_w",
+    "low_speed_energy_wh",
+    "low_speed_rpm",
+    "cruise_drag_n",
+    "cruise_wing_profile_drag_n",
+    "cruise_wing_induced_drag_n",
+    "cruise_htail_drag_n",
+    "cruise_vtail_drag_n",
+    "cruise_fuselage_drag_n",
+    "cruise_power_w",
+    "cruise_rpm",
     "cruise_alpha_deg",
     "cruise_lift_n",
-    "cruise_drag_n",
+    "cruise_vlm_induced_drag_n",
     "cruise_cl",
     "cruise_cd",
+    "cruise_l_over_d",
     "cruise_cm",
-    "static_cm_alpha_per_deg",
-    "section_re_low_speed",
+    "trim_residual_lift_n",
+    "trim_residual_cm",
     "section_re_cruise",
-    "clean_section_clmax_raw",
-    "flapped_section_clmax_raw",
-    "flap_delta_cl_raw",
-    "aileron_delta_cl_per_deg",
-    "elevator_delta_cm_per_deg",
-    "rudder_delta_cn_per_deg",
+    "section_re_low_speed",
+    "clean_section_clmax",
+    "flapped_section_clmax",
+    "approach_target_angle_deg",
+    "approach_speed_mps",
+    "approach_alpha_deg",
+    "approach_cl_required",
+    "approach_lift_required_n",
+    "approach_drag_n",
+    "approach_thrust_required_n",
+    "approach_power_w",
+    "approach_rpm",
+    "approach_throttle_percent",
+    "approach_sink_rate_mps",
+    "approach_glide_ratio",
+    "approach_elevator_trim_deg",
+    "approach_rudder_trim_deg",
+    "approach_flap_deflection_deg",
+    "approach_wing_profile_drag_n",
+    "approach_wing_induced_drag_n",
+    "approach_htail_drag_n",
+    "approach_vtail_drag_n",
+    "approach_fuselage_drag_n",
+    "approach_rpm_feasible",
     "geometry_score",
+    "penalty_score",
     "top_view_png",
     "three_view_png",
     "wireframe_png",
+    "render_3d_png",
     "polar_png",
+    "performance_sweep_csv",
+    "drag_power_sweeps_png",
+    "drag_components_png",
     "mesh_npz",
+    "report_md",
 ]
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         if rows:
             writer.writerows(rows)
+
+
+def _stage3_queue_rows(
+    mission: Stage1MissionConfig,
+    stage2_rows: list[dict[str, str]],
+    wing_context: dict[str, object],
+    config: Stage3SizingConfig,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in stage2_rows:
+        rows.append(
+            {
+                "n_props": row["n_props"],
+                "prop_diameter_in": row["prop_diameter_in"],
+                "prop_pitch_ratio": row["prop_pitch_ratio"],
+                "prop_family": row["prop_family"],
+                "fixed_wing_span_m": mission.span_m,
+                "fixed_wing_chord_m": mission.chord_m,
+                "fixed_main_airfoil": wing_context["selected_airfoil"],
+                "fixed_total_mass_kg": mission.gross_mass_kg,
+                "seed_low_speed_rpm": row["solved_low_speed_rpm"],
+                "seed_cruise_rpm": row["solved_cruise_rpm"],
+                "refine_variables": "horizontal_tail_area,horizontal_tail_AR,horizontal_tail_taper,vertical_tail_area,vertical_tail_AR,vertical_tail_taper,tail_arm,tail_incidence",
+                "material_model": f"NGX250 foam density {config.foam_density_kgpm3:.1f} kg/m^3",
+                "status": "QUEUED_FOR_TAIL_REFINEMENT",
+            }
+        )
+    return rows
+
+
+def _empty_failure_row(stage2_row: dict[str, str], status: str) -> dict[str, object]:
+    row: dict[str, object] = {field: "" for field in STAGE3_RESULTS_FIELDNAMES}
+    row.update(
+        {
+            "rank": 0,
+            "status": status,
+            "n_props": int(float(stage2_row["n_props"])),
+            "prop_diameter_in": float(stage2_row["prop_diameter_in"]),
+            "prop_pitch_ratio": float(stage2_row["prop_pitch_ratio"]),
+            "prop_family": stage2_row["prop_family"],
+        }
+    )
+    return row
+
+
+def _propulsion_matches_context(
+    stage2_row: dict[str, str],
+    wing_context: dict[str, object],
+) -> bool:
+    fixed_n_props = wing_context.get("fixed_n_props")
+    fixed_diameter = wing_context.get("fixed_prop_diameter_in")
+    fixed_pitch_ratio = wing_context.get("fixed_prop_pitch_ratio")
+    fixed_family = wing_context.get("fixed_prop_family")
+    if fixed_n_props is None or fixed_diameter is None or fixed_pitch_ratio is None or fixed_family is None:
+        return False
+    return all(
+        (
+            int(float(stage2_row["n_props"])) == int(fixed_n_props),
+            abs(float(stage2_row["prop_diameter_in"]) - float(fixed_diameter)) <= 5e-3,
+            abs(float(stage2_row["prop_pitch_ratio"]) - float(fixed_pitch_ratio)) <= 5e-3,
+            stage2_row["prop_family"] == str(fixed_family),
+        )
+    )
+
+
+def _fixed_stage2_rows(
+    stage2_rows: list[dict[str, str]],
+    wing_context: dict[str, object],
+) -> list[dict[str, str]]:
+    """Return only the frozen Stage 1/2 propulsion row for Stage 3 refinement."""
+
+    matches = [row for row in stage2_rows if _propulsion_matches_context(row, wing_context)]
+    if matches:
+        return matches[:1]
+    return stage2_rows[:1]
 
 
 def _artifact_slug(row: dict[str, object]) -> str:
@@ -120,7 +312,11 @@ def _rename_stage3_artifacts(rows: list[dict[str, object]]) -> None:
         "top_view_png": "top_view.png",
         "three_view_png": "three_view.png",
         "wireframe_png": "wireframe.png",
+        "render_3d_png": "3d_wireframe.png",
         "polar_png": "polars.png",
+        "performance_sweep_csv": "performance_sweep.csv",
+        "drag_power_sweeps_png": "drag_power_sweeps.png",
+        "drag_components_png": "drag_components.png",
         "mesh_npz": "mesh.npz",
     }
     for row in rows:
@@ -139,65 +335,64 @@ def _rename_stage3_artifacts(rows: list[dict[str, object]]) -> None:
             row[field] = str(new_path)
 
 
-def _stage3_queue_rows(
-    mission: Stage1MissionConfig,
-    stage2_rows: list[dict[str, str]],
+def _clear_stale_stage3_rank_artifacts() -> None:
+    """Remove old rank-labeled Stage 3 visuals before regenerating the fixed layout."""
+
+    if not STAGE3_VISUAL_DIR.exists():
+        return
+    for pattern in (
+        "rank*_top_view.png",
+        "rank*_three_view.png",
+        "rank*_wireframe.png",
+        "rank*_3d_wireframe.png",
+        "rank*_polars.png",
+        "rank*_performance_sweep.csv",
+        "rank*_drag_power_sweeps.png",
+        "rank*_drag_components.png",
+        "rank*_mesh.npz",
+    ):
+        for path in STAGE3_VISUAL_DIR.glob(pattern):
+            path.unlink()
+
+
+def run_stage3(
+    mission: Stage1MissionConfig | None = None,
+    config: Stage3SizingConfig | None = None,
 ) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for row in stage2_rows:
-        rows.append(
-            {
-                "n_props": row["n_props"],
-                "prop_diameter_in": row["prop_diameter_in"],
-                "prop_pitch_ratio": row["prop_pitch_ratio"],
-                "prop_family": row["prop_family"],
-                "baseline_span_m": mission.span_m,
-                "baseline_chord_m": mission.chord_m,
-                "baseline_low_speed_mps": mission.low_speed_mps,
-                "baseline_cruise_speed_mps": mission.cruise_speed_mps,
-                "seed_low_speed_rpm": row["solved_low_speed_rpm"],
-                "seed_cruise_rpm": row["solved_cruise_rpm"],
-                "refine_variables": "root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",
-                "status": "QUEUED_FOR_REFINEMENT",
-            }
-        )
-    return rows
-
-
-def run_stage3(mission: Stage1MissionConfig | None = None) -> list[dict[str, object]]:
     mission = mission or Stage1MissionConfig()
+    config = config or load_stage3_sizing_config()
+    wing_context = load_selected_wing_context(config)
     stage2_rows = load_csv_rows(STAGE2_INPUT_CSV)
+    fixed_stage2_rows = _fixed_stage2_rows(stage2_rows, wing_context)
     stage1_lookup = load_stage1_lookup(STAGE1_PARETO_INPUT_CSV)
 
-    queue_rows = _stage3_queue_rows(mission, stage2_rows)
+    queue_rows = _stage3_queue_rows(mission, fixed_stage2_rows, wing_context, config)
     _write_csv(QUEUE_OUTPUT_CSV, queue_rows, STAGE3_FIELDNAMES)
+    _clear_stale_stage3_rank_artifacts()
 
     results: list[dict[str, object]] = []
-    for index, stage2_row in enumerate(stage2_rows, start=1):
+    for index, stage2_row in enumerate(fixed_stage2_rows, start=1):
         key = candidate_key(stage2_row)
         stage1_row = stage1_lookup.get(key)
         if stage1_row is None:
-            results.append(
-                {
-                    "rank": 0,
-                    "status": "MISSING_STAGE1_CONTEXT",
-                    "n_props": int(float(stage2_row["n_props"])),
-                    "prop_diameter_in": float(stage2_row["prop_diameter_in"]),
-                    "prop_pitch_ratio": float(stage2_row["prop_pitch_ratio"]),
-                    "prop_family": stage2_row["prop_family"],
-                    **{field: "" for field in STAGE3_RESULTS_FIELDNAMES if field not in {"rank", "status", "n_props", "prop_diameter_in", "prop_pitch_ratio", "prop_family"}},
-                }
-            )
+            results.append(_empty_failure_row(stage2_row, "MISSING_STAGE1_CONTEXT"))
             continue
 
-        results.append(
-            refine_stage3_candidate(
-                mission,
-                stage2_row,
-                stage1_row,
-                rank_seed=index,
+        try:
+            results.append(
+                refine_stage3_candidate(
+                    mission,
+                    stage2_row,
+                    stage1_row,
+                    rank_seed=index,
+                    wing_context=wing_context,
+                    config=config,
+                )
             )
-        )
+        except Exception as exc:
+            failed = _empty_failure_row(stage2_row, "STAGE3_EXCEPTION")
+            failed["design_warnings"] = repr(exc)
+            results.append(failed)
 
     successful = sorted(
         [row for row in results if row["status"] == "SUCCESS"],
@@ -216,24 +411,42 @@ def run_stage3(mission: Stage1MissionConfig | None = None) -> list[dict[str, obj
     STAGE3_VISUAL_DIR.mkdir(parents=True, exist_ok=True)
     write_trade_space_plot(ordered_results, STAGE3_TRADE_PLOT)
     write_gallery(ordered_results, STAGE3_GALLERY_MD)
+    write_stage3_report(ordered_results, STAGE3_REPORT_MD, mission, config)
+    write_stage3_readable_results(ordered_results, STAGE3_READABLE_RESULTS_MD, mission, config)
+    write_stage3_engineering_tex(ordered_results, STAGE3_ENGINEERING_TEX, mission, config)
 
-    print("Stage 3 AeroSandbox refinement")
+    print("Stage 3 AeroSandbox fixed-wing tail/material refinement")
     print(f"  Stage 2 input:            {STAGE2_INPUT_CSV}")
+    print(f"  Stage 3 constraints:      {STAGE3_CONSTRAINTS_YAML}")
+    print(f"  Wing context:             {wing_context['source']}")
+    print(f"  Frozen airfoil:           {wing_context['selected_airfoil']}")
+    if fixed_stage2_rows:
+        frozen = fixed_stage2_rows[0]
+        print(
+            "  Frozen propulsion:        "
+            f"N={int(float(frozen['n_props']))}, "
+            f"D={float(frozen['prop_diameter_in']):.1f} in, "
+            f"P/D={float(frozen['prop_pitch_ratio']):.2f}, "
+            f"family={frozen['prop_family']}"
+        )
     print(f"  Queue output:             {QUEUE_OUTPUT_CSV}")
     print(f"  Refined result count:     {len(ordered_results)}")
     print(f"  Results CSV:              {RESULTS_OUTPUT_CSV}")
     print(f"  Top designs CSV:          {TOP_RESULTS_OUTPUT_CSV}")
+    print(f"  Readable results:         {STAGE3_READABLE_RESULTS_MD}")
+    print(f"  Design report:            {STAGE3_REPORT_MD}")
+    print(f"  LaTeX report:             {STAGE3_ENGINEERING_TEX}")
     print(f"  Visual gallery:           {STAGE3_GALLERY_MD}")
     print(f"  Trade-space plot:         {STAGE3_TRADE_PLOT}")
     if successful:
         best = successful[0]
         print(
             f"  Best concept: rank #{best['rank']} | N={best['n_props']} | "
-            f"D={best['prop_diameter_in']:.1f} in | "
-            f"root chord={best['optimized_root_chord_m']:.3f} m | "
-            f"taper={best['optimized_taper']:.2f} | "
-            f"Veff,req={best['refined_low_speed_required_veff_mps']:.2f} m/s | "
-            f"cruise drag={best['cruise_drag_n']:.2f} N"
+            f"D={float(best['prop_diameter_in']):.1f} in | "
+            f"H-tail span={float(best['htail_span_m']):.3f} m | "
+            f"V-tail height={float(best['vtail_span_m']):.3f} m | "
+            f"cruise power={float(best['cruise_power_w']):.1f} W | "
+            f"slow power={float(best['low_speed_power_w']):.1f} W"
         )
 
     return ordered_results

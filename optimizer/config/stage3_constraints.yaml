@@ -1,0 +1,160 @@
+# Stage 3 tail-refinement inputs.
+#
+# Units:
+# - Lengths are meters unless the key ends in "_deg" or says otherwise.
+# - Areas are square meters.
+# - Angles are degrees.
+# - Chord/span fractions are nondimensional values from 0 to 1.
+# - Volume coefficients, margins, CL/CD/CM/CN, and objective weights are nondimensional.
+#
+# Workflow:
+# - Main wing, airfoil, flap/aileron layout, and propeller count/spacing come from Stage 1/2.
+# - Stage 3 optimizes H-stab and V-stab planform for cruise trim/drag/stability/mass.
+# - Elevator and rudder chord fractions are then sized for slow-flight control authority.
+stage3_sizing:
+  # Airfoils and material model.
+  # main_airfoil_default is used only if the Stage 1/2 wing workflow summary is unavailable.
+  # tail_airfoil is fixed for both the horizontal and vertical stabilizers.
+  # foam_density_kgpm3 is NGX250 pink foam density in kg/m^3.
+  main_airfoil_default: DAE51
+  tail_airfoil: naca0008
+  foam_density_kgpm3: 25.0
+
+  # Fixed aerodynamic-surface incidences.
+  # main_wing_incidence_deg: geometric main-wing root incidence.
+  # main_wing_washout_deg: tip twist relative to root; negative means tip leading edge lower.
+  # vertical_tail_incidence_deg: yawed/incidence setting for the vertical tail; usually 0.
+  main_wing_incidence_deg: 0.0
+  main_wing_washout_deg: 0.0
+  vertical_tail_incidence_deg: 0.0
+
+  # Stage 1/2 control-surface fallback values.
+  # These are used only if Stage 1/2 control-surface CSVs are missing.
+  # In the normal workflow, Stage 3 reads flap/aileron geometry and CLmax from Stage 1/2 outputs.
+  flap_span_fraction_default: 0.65       # flap span as fraction of semispan
+  flap_chord_fraction_default: 0.34      # flap chord as fraction of local wing chord
+  flap_deflection_slow_deg: 40.0         # deployed slotted-flap angle for slow flight
+  slotted_flap_section_clmax: 3.0        # fallback 2D slotted-flap section CLmax
+  clean_outer_section_clmax: 1.45        # fallback clean outer-panel section CLmax
+  flap_down_3d_efficiency: 0.90          # fallback section-to-whole-wing CLmax multiplier
+  blown_flap_clmax_multiplier: 1.10      # fallback propwash CLmax multiplier
+  slow_flight_stall_margin_factor: 1.20  # divides CLmax for sizing; 1.20 means 20% lift margin
+  min_slow_flight_lift_margin: 0.10      # warning threshold after the stall-margin factor; 0.10 means 10%
+
+  # Fixed aileron geometry fallback from Stage 1/2.
+  # Elevator/rudder base chord fractions are reference values for the slow-flight sizing formula;
+  # the final elevator/rudder values are clipped to the bounds below and written to results CSV.
+  aileron_span_fraction_default: 0.28    # aileron span as fraction of semispan
+  aileron_chord_fraction_default: 0.28   # aileron chord as fraction of local wing chord
+  elevator_chord_fraction: 0.30          # reference elevator chord fraction for effectiveness scaling
+  rudder_chord_fraction: 0.32            # reference rudder chord fraction for effectiveness scaling
+  elevator_chord_fraction_bounds: [0.22, 0.45]  # min/max final elevator chord fraction
+  rudder_chord_fraction_bounds: [0.25, 0.50]    # min/max final rudder chord fraction
+  elevator_max_deflection_deg: 25.0      # max elevator deflection assumed for slow pitch authority
+  rudder_max_deflection_deg: 25.0        # max rudder deflection assumed for slow yaw authority
+  target_slow_pitch_control_cm: 0.18     # required pitch-moment coefficient authority at slow flight
+  target_slow_yaw_control_cn: 0.055      # required yaw-moment coefficient authority at slow flight
+  slow_tail_dynamic_pressure_ratio: 0.85 # q_tail/q_freestream at slow speed for control sizing
+  control_surface_effectiveness_exponent: 0.70 # maps chord fraction to control effectiveness
+
+  # Horizontal stabilizer optimizer bounds.
+  # Area is planform area for the full horizontal tail, not one side.
+  # Aspect ratio and taper control the span/root/tip chord derived from area.
+  h_tail_area_bounds_m2: [0.055, 1.1]
+  h_tail_aspect_ratio_bounds: [3.0, 6.0]
+  h_tail_taper_bounds: [0.55, 1.0]       # tip chord / root chord
+  h_tail_root_chord_bounds_m: [0.10, 0.34]
+
+  # Vertical stabilizer optimizer bounds.
+  # v_tail_area_bounds_m2 is the single vertical fin area.
+  # v_tail_aspect_ratio uses height^2 / area.
+  v_tail_area_bounds_m2: [0.025, 0.2]
+  v_tail_aspect_ratio_bounds: [1.15, 2.60]
+  v_tail_taper_bounds: [0.55, 1.0]       # tip chord / root chord
+  v_tail_root_chord_bounds_m: [0.10, 0.38]
+
+  # Tail arm and trim-incidence bounds.
+  # tail_arm_bounds_m is the distance from main-wing aerodynamic center to tail aerodynamic center.
+  # h_tail_incidence_bounds_deg limits the solved horizontal-tail cruise trim incidence.
+  tail_arm_bounds_m: [0.70, 1.55]
+  h_tail_incidence_bounds_deg: [-6.0, 6.0]
+
+  # Tail-volume coefficient constraints.
+  # These are the primary user-facing tail-sizing constraints:
+  #   horizontal_tail_volume = S_h * l_t / (S_wing * MAC)
+  #   vertical_tail_volume   = S_v * l_t / (S_wing * b_wing)
+  # The min/max_* aliases are kept for backward compatibility with older code paths.
+  horizontal_tail_volume_range: [0.50, 0.95]
+  vertical_tail_volume_range: [0.035, 0.085]
+  min_horizontal_tail_volume: 0.50
+  max_horizontal_tail_volume: 0.95
+  min_vertical_tail_volume: 0.035
+  max_vertical_tail_volume: 0.085
+
+  # Longitudinal stability targets.
+  # Static margin is measured in MAC, i.e. (neutral point - CG) / MAC.
+  target_static_margin_mac: 0.13
+  min_static_margin_mac: 0.08
+  max_static_margin_mac: 0.24
+
+  # Geometry and aerodynamic coupling assumptions.
+  # baseline_cg_fraction_mac: Stage 1/2 baseline CG before tail foam is added.
+  # wing_aerodynamic_center_fraction_mac: main-wing AC location from leading edge.
+  # prop_axial_location_fraction_of_chord: prop disk x/c from wing leading edge; negative is ahead of LE.
+  # tail_dynamic_pressure_ratio: q_tail/q_freestream at cruise for trim/stability.
+  # downwash_gradient: d(epsilon)/d(alpha), nondimensional.
+  baseline_cg_fraction_mac: 0.30
+  wing_aerodynamic_center_fraction_mac: 0.25
+  prop_axial_location_fraction_of_chord: -0.25
+  tail_dynamic_pressure_ratio: 0.90
+  downwash_gradient: 0.35
+
+  # Fuselage geometry and parasite drag.
+  # Width/height are the current fuselage cross-section dimensions.
+  # fuselage_cd_area_m2 is equivalent drag area: D_fuselage = q * CdA.
+  # tail_zero_lift_cd is profile CD used for the H/V tail drag buildup.
+  fuselage_width_m: 0.170
+  fuselage_height_m: 0.130
+  fuselage_tail_width_m: 0.095
+  fuselage_tail_height_m: 0.075
+  fuselage_cd_area_m2: 0.011
+  tail_zero_lift_cd: 0.012
+
+  # Objective weights for the stabilizer planform optimizer.
+  # Larger cruise_weight biases the H/V stabilizers toward lower cruise power.
+  # slow_flight_weight is intentionally small because elevator/rudder authority is sized separately.
+  # material_mass_weight penalizes tail foam mass.
+  # stability_weight penalizes deviation from target_static_margin_mac.
+  # Reference powers normalize the cruise and slow-flight terms in the scalar score.
+  cruise_weight: 0.68
+  slow_flight_weight: 0.06
+  material_mass_weight: 0.16
+  stability_weight: 0.10
+  reference_cruise_power_w: 120.0
+  reference_slow_flight_power_w: 220.0
+
+  # Performance-sweep plots generated for the final ranked designs.
+  # Velocity sweeps trim CL to support aircraft weight at each speed, then estimate drag and prop power.
+  # Alpha sweeps hold speed fixed and vary angle of attack to show the drag/power trend across incidence.
+  # clean_sweep_speed_mps should usually match cruise_speed_mps from Stage 1.
+  # flaps_down_sweep_speed_mps should usually match low_speed_mps from Stage 1.
+  performance_sweep_velocity_min_mps: 3.5  # lower x-axis speed for D(V) and P(V) plots
+  performance_sweep_velocity_max_mps: 16.0 # upper x-axis speed for D(V) and P(V) plots
+  performance_sweep_velocity_points: 51    # number of velocity samples in the sweep CSV/plot
+  performance_sweep_alpha_min_deg: -4.0    # lower alpha bound for D(alpha) and P(alpha)
+  performance_sweep_alpha_max_deg: 18.0    # upper alpha bound for D(alpha) and P(alpha)
+  performance_sweep_alpha_points: 89       # number of alpha samples in the sweep CSV/plot
+  clean_sweep_speed_mps: 10.0              # fixed speed for clean alpha sweep
+  flaps_down_sweep_speed_mps: 4.0          # fixed speed for flaps-down alpha sweep
+
+  # Approach estimate assumptions.
+  # approach_target_angle_deg is the desired descent angle below horizontal; positive means descending.
+  # approach_speed_mps is the trimmed approach speed used with flaps deployed.
+  # approach_flap_deflection_deg is the commanded flap setting for the approach calculation.
+  # approach_max_elevator_trim_deg clips the estimated elevator trim command.
+  # approach_tail_trim_effectiveness scales elevator trim power for hinge gaps, low-Re effects, and tail inflow losses.
+  approach_target_angle_deg: 6.0
+  approach_speed_mps: 5.0
+  approach_flap_deflection_deg: 40.0
+  approach_max_elevator_trim_deg: 20.0
+  approach_tail_trim_effectiveness: 0.85

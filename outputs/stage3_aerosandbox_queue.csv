@@ -1,12 +1,2 @@
-n_props,prop_diameter_in,prop_pitch_ratio,prop_family,baseline_span_m,baseline_chord_m,baseline_low_speed_mps,baseline_cruise_speed_mps,seed_low_speed_rpm,seed_cruise_rpm,refine_variables,status
-6,7.0,0.4,cruise,2.0,0.35,4.0,10.0,7806.2,7337.9,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-10,5.5,0.4,balanced,2.0,0.35,4.0,10.0,9695.8,9564.5,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-8,5.5,0.4,balanced,2.0,0.35,4.0,10.0,10560.1,10193.4,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-4,8.0,0.5,cruise,2.0,0.35,4.0,10.0,6858.9,6462.9,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-10,5.5,0.4,cruise,2.0,0.35,4.0,10.0,10374.5,9474.6,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-4,7.0,0.5,balanced,2.0,0.35,4.0,10.0,8314.0,8154.3,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-8,5.5,0.4,cruise,2.0,0.35,4.0,10.0,11331.5,10209.0,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-4,7.0,0.5,cruise,2.0,0.35,4.0,10.0,8919.4,8189.5,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-4,6.0,0.5,balanced,2.0,0.35,4.0,10.0,11277.8,10619.1,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-6,5.5,0.5,cruise,2.0,0.35,4.0,10.0,12303.2,10978.5,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
-4,6.0,0.5,cruise,2.0,0.35,4.0,10.0,12147.0,10826.2,"root_chord,taper,washout,flap_span,flap_chord,aileron_span,aileron_chord,tail_volume",QUEUED_FOR_REFINEMENT
+n_props,prop_diameter_in,prop_pitch_ratio,prop_family,fixed_wing_span_m,fixed_wing_chord_m,fixed_main_airfoil,fixed_total_mass_kg,seed_low_speed_rpm,seed_cruise_rpm,refine_variables,material_model,status
+10,5.5,0.4,balanced,2.0,0.35,DAE51,5.0,9695.8,9564.5,"horizontal_tail_area,horizontal_tail_AR,horizontal_tail_taper,vertical_tail_area,vertical_tail_AR,vertical_tail_taper,tail_arm,tail_incidence",NGX250 foam density 25.0 kg/m^3,QUEUED_FOR_TAIL_REFINEMENT
