@@ -83,10 +83,14 @@ class Stage3SizingConfig:
     max_static_margin_mac: float = 0.24
 
     baseline_cg_fraction_mac: float = 0.30
+    enforce_target_cg: bool = True
+    target_cg_fraction_mac: float = 0.25
+    baseline_cg_fraction_bounds_mac: tuple[float, float] = (0.05, 0.45)
     wing_aerodynamic_center_fraction_mac: float = 0.25
     prop_axial_location_fraction_of_chord: float = -0.25  # Prop disk x-location relative to the wing leading edge; negative means ahead of the leading edge, matching Stage 1/2 high-lift assumptions.
     tail_dynamic_pressure_ratio: float = 0.90
     downwash_gradient: float = 0.35
+    fuselage_nose_x_m: float = -0.175             # Nose station relative to wing leading edge; -0.175 is 175 mm ahead of the LE.
     fuselage_width_m: float = 0.170              # Current structural cross-section width: 170 mm.
     fuselage_height_m: float = 0.130             # Current structural cross-section height: 130 mm.
     fuselage_tail_width_m: float = 0.095
@@ -100,6 +104,13 @@ class Stage3SizingConfig:
     stability_weight: float = 0.10
     reference_cruise_power_w: float = 120.0
     reference_slow_flight_power_w: float = 220.0
+
+    ecalc_propulsion_enabled: bool = True
+    ecalc_static_csv: str = "outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv"
+    ecalc_dynamic_csv: str = "outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_dynamic_design_point.csv"
+    ecalc_reference_n_props: int = 10
+    ecalc_reference_prop_diameter_in: float = 5.5
+    ecalc_match_diameter_tolerance_in: float = 0.05
 
     performance_sweep_velocity_min_mps: float = 3.5
     performance_sweep_velocity_max_mps: float = 16.0
@@ -277,6 +288,13 @@ def _stage1_candidate_from_row(row: dict[str, str]) -> Stage1Candidate:
     )
 
 
+def _resolve_repo_path(path_value: str | Path) -> Path:
+    path = Path(path_value)
+    if path.exists():
+        return path
+    return _repo_root() / path
+
+
 def _csv_path(value: Any) -> Path | None:
     if not value:
         return None
@@ -294,6 +312,156 @@ def _first_csv_row(path: Path | None) -> dict[str, str] | None:
         return None
     rows = load_csv_rows(path)
     return rows[0] if rows else None
+
+
+_ECALC_PROP_CACHE: dict[tuple[str, str], dict[str, Any] | None] = {}
+
+
+def _load_ecalc_prop_calibration(config: Stage3SizingConfig) -> dict[str, Any] | None:
+    static_path = _resolve_repo_path(config.ecalc_static_csv)
+    dynamic_path = _resolve_repo_path(config.ecalc_dynamic_csv)
+    cache_key = (str(static_path), str(dynamic_path))
+    if cache_key in _ECALC_PROP_CACHE:
+        return _ECALC_PROP_CACHE[cache_key]
+
+    static_rows = load_csv_rows(static_path)
+    if not static_rows:
+        _ECALC_PROP_CACHE[cache_key] = None
+        return None
+
+    table: list[dict[str, float]] = []
+    for row in static_rows:
+        rpm = _safe_float(row.get("rpm"), float("nan"))
+        if math.isnan(rpm):
+            continue
+        table.append(
+            {
+                "rpm": rpm,
+                "thrust_n": _safe_float(row.get("thrust_n"), 0.0),
+                "electric_power_w": _safe_float(row.get("electric_power_w"), 0.0),
+                "shaft_power_w": _safe_float(row.get("shaft_power_w"), 0.0),
+                "ct_static": _safe_float(row.get("ct_static"), 0.0),
+                "cp_static": _safe_float(row.get("cp_static"), 0.0),
+            }
+        )
+    table.sort(key=lambda item: item["rpm"])
+    if not table:
+        _ECALC_PROP_CACHE[cache_key] = None
+        return None
+
+    dynamic_rows = load_csv_rows(dynamic_path)
+    dynamic = dynamic_rows[0] if dynamic_rows else {}
+    calibration = {
+        "source": f"eCalc static table: {static_path}",
+        "static_path": str(static_path),
+        "dynamic_path": str(dynamic_path) if dynamic_rows else "",
+        "table": table,
+        "dynamic_advance_ratio": _safe_float(dynamic.get("advance_ratio"), 0.0),
+        "dynamic_ct": _safe_float(dynamic.get("ct"), 0.0),
+        "dynamic_cp": _safe_float(dynamic.get("cp"), 0.0),
+        "dynamic_rpm": _safe_float(dynamic.get("rpm"), 0.0),
+    }
+    _ECALC_PROP_CACHE[cache_key] = calibration
+    return calibration
+
+
+def _interp_table_value(table: list[dict[str, float]], rpm: float, key: str) -> float:
+    if rpm <= table[0]["rpm"]:
+        return table[0][key]
+    if rpm >= table[-1]["rpm"]:
+        return table[-1][key]
+    for lower, upper in zip(table[:-1], table[1:]):
+        if lower["rpm"] <= rpm <= upper["rpm"]:
+            span = max(upper["rpm"] - lower["rpm"], 1e-12)
+            frac = (rpm - lower["rpm"]) / span
+            return lower[key] + frac * (upper[key] - lower[key])
+    return table[-1][key]
+
+
+def _candidate_matches_ecalc(config: Stage3SizingConfig, candidate: Stage1Candidate) -> bool:
+    return (
+        int(candidate.n_props) == int(config.ecalc_reference_n_props)
+        and abs(candidate.prop_diameter_in - config.ecalc_reference_prop_diameter_in)
+        <= config.ecalc_match_diameter_tolerance_in
+    )
+
+
+def _stage3_prop_operating_point(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    rpm: float,
+    flight_speed_mps: float,
+    config: Stage3SizingConfig,
+) -> dict[str, float]:
+    if not config.ecalc_propulsion_enabled or not _candidate_matches_ecalc(config, candidate):
+        op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op["propulsion_model_source"] = "Stage 1 generic prop surrogate"
+        return op
+
+    calibration = _load_ecalc_prop_calibration(config)
+    if calibration is None:
+        op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op["propulsion_model_source"] = "Stage 1 generic prop surrogate; eCalc files unavailable"
+        return op
+
+    n_rev_per_sec = rpm / 60.0
+    if n_rev_per_sec <= 1e-12:
+        op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op["propulsion_model_source"] = calibration["source"]
+        return op
+
+    table = calibration["table"]
+    static_thrust_per_prop = _interp_table_value(table, rpm, "thrust_n")
+    electric_power_per_prop = _interp_table_value(table, rpm, "electric_power_w")
+    shaft_power_per_prop = _interp_table_value(table, rpm, "shaft_power_w")
+    ct_static = _interp_table_value(table, rpm, "ct_static")
+    cp_static = _interp_table_value(table, rpm, "cp_static")
+
+    advance_ratio = flight_speed_mps / max(n_rev_per_sec * candidate.prop_diameter_m, 1e-12)
+    dynamic_j = calibration["dynamic_advance_ratio"]
+    dynamic_ct = calibration["dynamic_ct"]
+    if dynamic_j > 1e-9 and dynamic_ct > 1e-9:
+        dynamic_ct_static = _interp_table_value(table, calibration["dynamic_rpm"], "ct_static")
+        ct_ratio_at_reference = _clamp(dynamic_ct / max(dynamic_ct_static, 1e-12), 0.20, 1.20)
+        thrust_factor = _clamp(
+            1.0 - (1.0 - ct_ratio_at_reference) * advance_ratio / dynamic_j,
+            0.0,
+            1.15,
+        )
+    else:
+        thrust_factor = 1.0
+
+    thrust_per_prop = static_thrust_per_prop * thrust_factor
+    thrust_total = candidate.n_props * thrust_per_prop
+    shaft_power_total = candidate.n_props * shaft_power_per_prop
+    electric_power_total = candidate.n_props * electric_power_per_prop + mission.avionics_power_w
+    torque_per_prop = shaft_power_per_prop / max(2.0 * math.pi * n_rev_per_sec, 1e-9)
+    tip_speed = math.sqrt((math.pi * candidate.prop_diameter_m * n_rev_per_sec) ** 2 + flight_speed_mps**2)
+    tip_mach = tip_speed / mission.speed_of_sound_mps
+    blade_re = (
+        mission.air_density_kgpm3
+        * math.sqrt((0.75 * math.pi * candidate.prop_diameter_m * n_rev_per_sec) ** 2 + flight_speed_mps**2)
+        * mission.blade_chord_to_diameter
+        * candidate.prop_diameter_m
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+
+    return {
+        "rpm": rpm,
+        "advance_ratio": advance_ratio,
+        "ct": ct_static * thrust_factor,
+        "cp": max(calibration["dynamic_cp"], cp_static) if calibration["dynamic_cp"] > 0.0 else cp_static,
+        "thrust_total_n": thrust_total,
+        "power_shaft_total_w": shaft_power_total,
+        "power_shaft_per_prop_w": shaft_power_per_prop,
+        "power_electric_total_w": electric_power_total,
+        "torque_per_prop_nm": torque_per_prop,
+        "tip_mach": tip_mach,
+        "blade_reynolds": blade_re,
+        "reynolds_penalty": 1.0,
+        "propulsion_model_source": calibration["source"],
+    }
+
 
 
 def _curve_column_peak(
@@ -699,15 +867,16 @@ def _solve_prop_power_for_thrust(
     velocity_mps: float,
     thrust_required_n: float,
     rpm_bounds: tuple[int, int],
+    config: Stage3SizingConfig,
 ) -> dict[str, float]:
     lower, upper = [float(v) for v in rpm_bounds]
 
     def residual(rpm: float) -> float:
-        return prop_operating_point(mission, candidate, rpm, velocity_mps)["thrust_total_n"] - thrust_required_n
+        return _stage3_prop_operating_point(mission, candidate, rpm, velocity_mps, config)["thrust_total_n"] - thrust_required_n
 
     r_lower = residual(lower)
     if r_lower >= 0.0:
-        op = prop_operating_point(mission, candidate, lower, velocity_mps)
+        op = _stage3_prop_operating_point(mission, candidate, lower, velocity_mps, config)
         op["thrust_required_n"] = thrust_required_n
         op["thrust_margin_n"] = op["thrust_total_n"] - thrust_required_n
         op["rpm_feasible"] = 1.0
@@ -716,7 +885,7 @@ def _solve_prop_power_for_thrust(
     r_upper = residual(upper)
     feasible = r_upper >= 0.0
     if not feasible:
-        op = prop_operating_point(mission, candidate, upper, velocity_mps)
+        op = _stage3_prop_operating_point(mission, candidate, upper, velocity_mps, config)
         op["thrust_required_n"] = thrust_required_n
         op["thrust_margin_n"] = op["thrust_total_n"] - thrust_required_n
         op["rpm_feasible"] = 0.0
@@ -733,7 +902,7 @@ def _solve_prop_power_for_thrust(
             lower = mid
 
     rpm = 0.5 * (lower + upper)
-    op = prop_operating_point(mission, candidate, rpm, velocity_mps)
+    op = _stage3_prop_operating_point(mission, candidate, rpm, velocity_mps, config)
     op["thrust_required_n"] = thrust_required_n
     op["thrust_margin_n"] = op["thrust_total_n"] - thrust_required_n
     op["rpm_feasible"] = 1.0
@@ -779,15 +948,29 @@ def _evaluate_tail_proxy(
     stage3_total_mass = stage1_total_mass + tail_foam_mass
 
     wing_ac_x = config.wing_aerodynamic_center_fraction_mac * mac
-    base_cg_x = config.baseline_cg_fraction_mac * mac
     htail_ac_x = wing_ac_x + geometry["tail_arm_m"]
     vtail_ac_x = htail_ac_x
+    target_cg_x = config.target_cg_fraction_mac * mac
+    required_base_cg_x = (
+        target_cg_x * stage3_total_mass
+        - h_volume_mass * htail_ac_x
+        - v_volume_mass * vtail_ac_x
+    ) / max(stage1_total_mass, 1e-9)
+    if config.enforce_target_cg:
+        lower_cg_x = config.baseline_cg_fraction_bounds_mac[0] * mac
+        upper_cg_x = config.baseline_cg_fraction_bounds_mac[1] * mac
+        base_cg_x = _clamp(required_base_cg_x, lower_cg_x, upper_cg_x)
+    else:
+        base_cg_x = config.baseline_cg_fraction_mac * mac
+    base_cg_fraction = base_cg_x / max(mac, 1e-9)
     cg_x = (
         stage1_total_mass * base_cg_x
         + h_volume_mass * htail_ac_x
         + v_volume_mass * vtail_ac_x
     ) / max(stage3_total_mass, 1e-9)
     cg_fraction = cg_x / max(mac, 1e-9)
+    cg_error_m = cg_x - target_cg_x
+    required_base_cg_fraction = required_base_cg_x / max(mac, 1e-9)
 
     cl_wing_cruise = weight_n / max(q_cruise * s_wing, 1e-9)
     alpha_wing = _alpha_for_cl(main_polar, cl_wing_cruise)
@@ -836,6 +1019,7 @@ def _evaluate_tail_proxy(
         mission.cruise_speed_mps,
         mission.thrust_margin_cruise * cruise_drag,
         mission.cruise_rpm_bounds,
+        config,
     )
 
     effective_weight_n = max(weight_n, stage3_total_mass * mission.gravity_mps2)
@@ -873,6 +1057,7 @@ def _evaluate_tail_proxy(
         mission.low_speed_mps,
         low_required_thrust,
         mission.low_speed_rpm_bounds,
+        config,
     )
     low_steady_drag = max(low_natural_drag, low_op["thrust_total_n"])
     low_added_drag_required = max(0.0, low_steady_drag - low_natural_drag)
@@ -918,6 +1103,10 @@ def _evaluate_tail_proxy(
     add_lower_penalty(static_margin, config.min_static_margin_mac, 0.02, 24.0)
     add_upper_penalty(static_margin, config.max_static_margin_mac, 0.04, 8.0)
     add_lower_penalty(mass_budget_margin, 0.0, 0.10, 60.0)
+    if config.enforce_target_cg:
+        add_upper_penalty(abs(cg_error_m), 1e-4, 0.002, 80.0)
+        add_lower_penalty(required_base_cg_fraction, config.baseline_cg_fraction_bounds_mac[0], 0.02, 18.0)
+        add_upper_penalty(required_base_cg_fraction, config.baseline_cg_fraction_bounds_mac[1], 0.02, 18.0)
     add_lower_penalty(slow_lift_margin_fraction, config.min_slow_flight_lift_margin, 0.05, 18.0)
     add_upper_penalty(abs(tail_cl_cruise), 0.65, 0.10, 10.0)
     add_upper_penalty(abs(htail_incidence_deg), config.h_tail_incidence_bounds_deg[1], 1.0, 12.0)
@@ -975,6 +1164,8 @@ def _evaluate_tail_proxy(
         "cruise_fuselage_drag_n": cruise_fuselage_drag,
         "cruise_power_w": cruise_op["power_electric_total_w"],
         "cruise_rpm": cruise_op["rpm"],
+        "cruise_ct": cruise_op["ct"],
+        "cruise_cp": cruise_op["cp"],
         "low_speed_drag_n": low_steady_drag,
         "low_speed_natural_drag_n": low_natural_drag,
         "low_speed_added_drag_required_n": low_added_drag_required,
@@ -997,9 +1188,21 @@ def _evaluate_tail_proxy(
         "slow_flight_equiv_stall_speed_mps": equivalent_flap_down_stall_speed,
         "low_speed_power_w": low_op["power_electric_total_w"],
         "low_speed_rpm": low_op["rpm"],
+        "low_speed_ct": low_op["ct"],
+        "low_speed_cp": low_op["cp"],
         "low_speed_thrust_required_n": low_required_thrust,
+        "propulsion_model_source": low_op.get(
+            "propulsion_model_source",
+            cruise_op.get("propulsion_model_source", "Stage 1 generic prop surrogate"),
+        ),
         "cg_x_m": cg_x,
         "cg_percent_mac": 100.0 * cg_fraction,
+        "cg_target_x_m": target_cg_x,
+        "cg_target_percent_mac": 100.0 * config.target_cg_fraction_mac,
+        "cg_error_m": cg_error_m,
+        "cg_error_percent_mac": 100.0 * (cg_fraction - config.target_cg_fraction_mac),
+        "stage1_baseline_cg_used_percent_mac": 100.0 * base_cg_fraction,
+        "stage1_baseline_cg_required_percent_mac": 100.0 * required_base_cg_fraction,
         "neutral_point_x_m": x_np,
         "static_margin_mac": static_margin,
         "stage1_total_built_mass_kg": stage1_total_mass,
@@ -1343,7 +1546,7 @@ def build_airplane_geometry(
     fuselage = asb.Fuselage(
         name="Fuselage",
         xsecs=[
-            asb.FuselageXSec(xyz_c=[-0.10, 0.0, 0.0], radius=0.025),
+            asb.FuselageXSec(xyz_c=[config.fuselage_nose_x_m, 0.0, 0.0], radius=0.001),
             asb.FuselageXSec(xyz_c=[0.24, 0.0, 0.0], width=config.fuselage_width_m, height=config.fuselage_height_m),
             asb.FuselageXSec(xyz_c=[0.90, 0.0, 0.0], width=config.fuselage_tail_width_m, height=config.fuselage_tail_height_m),
             asb.FuselageXSec(xyz_c=[fuselage_end_x, 0.0, 0.01], radius=0.016),
@@ -1364,6 +1567,7 @@ def build_airplane_geometry(
         "aileron_start_y_m": aileron_start_y,
         "wing_ac_x_m": wing_ac_x,
         "htail_ac_x_m": htail_ac_x,
+        "fuselage_nose_x_m": config.fuselage_nose_x_m,
         "fuselage_end_x_m": fuselage_end_x,
     }
     return airplane, meta
@@ -1554,10 +1758,11 @@ def render_top_view(
 
     fuselage_half_width = config.fuselage_width_m / 2.0
     fuselage_end_x = max(htail_ac_x + 0.65 * geometry["htail_root_chord_m"], 1.25)
+    fuselage_nose_x = config.fuselage_nose_x_m
     ax.add_patch(
         patches.FancyBboxPatch(
-            (-0.10, -fuselage_half_width),
-            fuselage_end_x + 0.10,
+            (fuselage_nose_x, -fuselage_half_width),
+            fuselage_end_x - fuselage_nose_x,
             2.0 * fuselage_half_width,
             boxstyle="round,pad=0.02,rounding_size=0.025",
             linewidth=1.0,
@@ -1588,6 +1793,7 @@ def render_top_view(
         0.98,
         (
             f"wing b={mission.span_m:.2f} m, c={mission.chord_m:.2f} m\n"
+            f"nose x={fuselage_nose_x:.3f} m\n"
             f"props x={prop_x:.3f} m, N={int(float(stage2_row['n_props']))}\n"
             f"H-tail b={geometry['htail_span_m']:.3f} m, S={geometry['htail_area_m2']:.3f} m^2\n"
             f"V-tail h={geometry['vtail_span_m']:.3f} m, S={geometry['vtail_area_m2']:.3f} m^2\n"
@@ -1600,7 +1806,7 @@ def render_top_view(
         fontsize=9,
     )
     ax.set_aspect("equal")
-    ax.set_xlim(min(-0.16, prop_x - prop_radius - 0.04), fuselage_end_x + 0.18)
+    ax.set_xlim(min(fuselage_nose_x - 0.04, prop_x - prop_radius - 0.04), fuselage_end_x + 0.18)
     ax.set_ylim(-1.12, 1.12)
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
@@ -1771,6 +1977,7 @@ def _power_for_drag(
     velocity_mps: float,
     drag_n: float,
     mode: str,
+    config: Stage3SizingConfig,
 ) -> dict[str, float]:
     rpm_bounds = mission.low_speed_rpm_bounds if mode == "flaps_down" else mission.cruise_rpm_bounds
     op = _solve_prop_power_for_thrust(
@@ -1779,6 +1986,7 @@ def _power_for_drag(
         velocity_mps,
         max(drag_n, 0.0),
         rpm_bounds,
+        config,
     )
     return {
         "power_w": op["power_electric_total_w"],
@@ -1794,6 +2002,7 @@ def _append_power_to_breakdown(
     candidate: Stage1Candidate,
     breakdown: dict[str, float],
     mode: str,
+    config: Stage3SizingConfig,
 ) -> dict[str, float]:
     power = _power_for_drag(
         mission,
@@ -1801,6 +2010,7 @@ def _append_power_to_breakdown(
         breakdown["velocity_mps"],
         breakdown["total_drag_n"],
         mode,
+        config,
     )
     return {**breakdown, **power}
 
@@ -1839,8 +2049,15 @@ def calculate_approach_trim(
         approach_speed,
         thrust_required,
         mission.low_speed_rpm_bounds,
+        config,
     )
-    max_op = prop_operating_point(mission, candidate, mission.low_speed_rpm_bounds[1], approach_speed)
+    max_op = _stage3_prop_operating_point(
+        mission,
+        candidate,
+        mission.low_speed_rpm_bounds[1],
+        approach_speed,
+        config,
+    )
     throttle_percent = 100.0 * thrust_required / max(max_op["thrust_total_n"], 1e-9)
 
     h_lift_slope = _finite_wing_lift_slope_per_rad(geometry["htail_aspect_ratio"])
@@ -1947,7 +2164,9 @@ def generate_performance_sweep_outputs(
                     mode=mode,
                 ),
                 mode,
+                config,
             )
+            
             breakdown["cl_required"] = cl_required
             velocity_curve.append(breakdown)
             rows.append({"mode": mode, "sweep_type": "velocity", **breakdown})
@@ -1969,7 +2188,9 @@ def generate_performance_sweep_outputs(
                     mode=mode,
                 ),
                 mode,
+                config,
             )
+            
             breakdown["cl_required"] = float("nan")
             alpha_curve.append(breakdown)
             rows.append({"mode": mode, "sweep_type": "alpha", **breakdown})
@@ -2015,8 +2236,8 @@ def generate_performance_sweep_outputs(
 
     axs[0, 0].set_title("Total Drag vs Velocity")
     axs[0, 1].set_title("Total Drag vs Angle of Attack")
-    axs[1, 0].set_title("Electrical Power Required vs Velocity")
-    axs[1, 1].set_title("Electrical Power Required vs Angle of Attack")
+    axs[1, 0].set_title("Drag-Balance Electrical Power vs Velocity")
+    axs[1, 1].set_title("Drag-Balance Electrical Power vs Angle of Attack")
     axs[0, 0].set_xlabel("Velocity [m/s]")
     axs[1, 0].set_xlabel("Velocity [m/s]")
     axs[0, 1].set_xlabel("Angle of attack [deg]")
@@ -2028,7 +2249,13 @@ def generate_performance_sweep_outputs(
     for ax in axs.flat:
         ax.grid(True, alpha=0.3)
         ax.legend()
+    note = (
+        "Power curves balance the plotted section-polar drag. "
+        "The reported slow-flight power is the separate blown-lift slipstream design point."
+    )
+    fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8, color="#374151")
     fig.tight_layout()
+    fig.subplots_adjust(bottom=0.08)
     fig.savefig(plot_path, dpi=180, bbox_inches="tight")
     plt.close(fig)
 
@@ -2171,10 +2398,12 @@ def write_stage3_report(
         f"- Main wing span: `{mission.span_m:.3f} m`",
         f"- Main wing chord: `{mission.chord_m:.3f} m`",
         f"- Main wing area: `{mission.wing_area_m2:.3f} m^2`",
+        f"- Fuselage nose station: `{config.fuselage_nose_x_m:.3f} m` from wing leading edge",
         f"- Fuselage cross-section: `{config.fuselage_width_m * 1000.0:.0f} mm` wide x `{config.fuselage_height_m * 1000.0:.0f} mm` tall",
         f"- Low-speed mode: `{mission.low_speed_mps:.3f} m/s`",
         f"- Cruise mode: `{mission.cruise_speed_mps:.3f} m/s`",
         f"- Foam density: `{config.foam_density_kgpm3:.1f} kg/m^3`",
+        f"- eCalc propulsion calibration enabled: `{config.ecalc_propulsion_enabled}`",
         "",
         "## Optimizer Notes",
         "",
@@ -2187,7 +2416,7 @@ def write_stage3_report(
         f"- Fuselage drag is included as an equivalent parasite drag area, `CdA = {config.fuselage_cd_area_m2:.3f} m^2`, so `D_fuse = q * CdA`.",
         "- Tail foam mass is added to the Stage 1/2 built-mass estimate before checking the mass margin.",
         "- Tail sizing is constrained by horizontal/vertical tail volume, static margin, trim incidence, material mass, and prop RPM feasibility.",
-        "- Cruise power and slow-flight power are both re-solved with the selected propeller surrogate instead of merely scaling the Stage 1 numbers.",
+        "- Cruise power and slow-flight power are both re-solved. If the frozen propulsion layout matches the eCalc calibration files, Stage 3 uses the eCalc thrust/power table and dynamic CT correction; otherwise it falls back to the Stage 1 generic prop surrogate.",
         "",
     ]
 
@@ -2200,11 +2429,14 @@ def write_stage3_report(
                 "| Quantity | Value |",
                 "| --- | ---: |",
                 f"| Propulsion layout | {best['n_props']} x {best['prop_diameter_in']} in, P/D {best['prop_pitch_ratio']}, {best['prop_family']} |",
+                f"| Propulsion model | {best['propulsion_model_source']} |",
+                f"| eCalc static CSV | {best['ecalc_static_csv']} |",
                 f"| Main airfoil | {best['selected_airfoil']} |",
                 f"| Main wing span | {float(best['wing_span_m']):.3f} m |",
                 f"| Main wing chord | {float(best['wing_chord_m']):.3f} m |",
                 f"| Main wing incidence | {float(best['main_wing_incidence_deg']):.3f} deg |",
                 f"| Propeller axial x position | {float(best['prop_axial_x_m']):.3f} m |",
+                f"| Fuselage nose station | {float(best['fuselage_nose_x_m']):.3f} m from wing LE |",
                 f"| Fuselage width x height | {float(best['fuselage_width_m']) * 1000.0:.0f} mm x {float(best['fuselage_height_m']) * 1000.0:.0f} mm |",
                 f"| Horizontal tail span | {float(best['htail_span_m']):.3f} m |",
                 f"| Horizontal tail root chord | {float(best['htail_root_chord_m']):.3f} m |",
@@ -2217,6 +2449,8 @@ def write_stage3_report(
                 f"| Vertical tail incidence | {float(best['vertical_tail_incidence_deg']):.3f} deg |",
                 f"| Rudder chord fraction | {float(best['rudder_chord_fraction']):.3f} chord |",
                 f"| Tail arm | {float(best['tail_arm_m']):.3f} m |",
+                f"| CG target / actual | {float(best['cg_target_percent_mac']):.2f}% / {float(best['cg_percent_mac']):.2f}% MAC |",
+                f"| Required pre-tail baseline CG | {float(best['stage1_baseline_cg_required_percent_mac']):.2f}% MAC |",
                 f"| Static margin | {float(best['static_margin_mac']):.3f} MAC |",
                 f"| H-tail volume range / actual | {float(best['horizontal_tail_volume_min']):.3f}-{float(best['horizontal_tail_volume_max']):.3f} / {float(best['horizontal_tail_volume']):.3f} |",
                 f"| V-tail volume range / actual | {float(best['vertical_tail_volume_min']):.3f}-{float(best['vertical_tail_volume_max']):.3f} / {float(best['vertical_tail_volume']):.3f} |",
@@ -2233,11 +2467,16 @@ def write_stage3_report(
                 f"| Slow-flight lift margin | {float(best['slow_flight_lift_margin_percent']):.1f}% |",
                 f"| Cruise fuselage drag | {float(best['cruise_fuselage_drag_n']):.3f} N |",
                 f"| Cruise power | {float(best['cruise_power_w']):.2f} W |",
+                f"| Cruise CT / CP | {float(best['cruise_ct']):.4f} / {float(best['cruise_cp']):.4f} |",
                 f"| Slow-flight power | {float(best['low_speed_power_w']):.2f} W |",
+                f"| Slow-flight CT / CP | {float(best['low_speed_ct']):.4f} / {float(best['low_speed_cp']):.4f} |",
                 f"| Slow-flight natural drag before added drag | {float(best['low_speed_natural_drag_n']):.3f} N |",
                 f"| Slow-flight added drag required | {float(best['low_speed_added_drag_required_n']):.3f} N |",
                 f"| Slow-flight steady total drag | {float(best['low_speed_drag_n']):.3f} N |",
                 f"| Slow-flight steady drag minus cruise drag | {float(best['low_speed_drag_delta_vs_cruise_n']):.3f} N |",
+                f"| Main wing Reynolds number, cruise / slow | {float(best['main_wing_re_cruise']):.0f} / {float(best['main_wing_re_low_speed']):.0f} |",
+                f"| H-tail Reynolds number, cruise / slow | {float(best['htail_re_cruise']):.0f} / {float(best['htail_re_low_speed']):.0f} |",
+                f"| V-tail Reynolds number, cruise / slow | {float(best['vtail_re_cruise']):.0f} / {float(best['vtail_re_low_speed']):.0f} |",
                 f"| Approach target angle | {float(best['approach_target_angle_deg']):.2f} deg below horizontal |",
                 f"| Approach speed | {float(best['approach_speed_mps']):.2f} m/s |",
                 f"| Approach elevator trim | {float(best['approach_elevator_trim_deg']):.2f} deg |",
@@ -2346,6 +2585,8 @@ def write_stage3_readable_results(
             f"| Propeller diameter | {float(row['prop_diameter_in']):.2f} in |",
             f"| Propeller pitch ratio | {float(row['prop_pitch_ratio']):.2f} |",
             f"| Propeller family | {row['prop_family']} |",
+            f"| Propulsion model | {row['propulsion_model_source']} |",
+            f"| eCalc static CSV | `{row['ecalc_static_csv']}` |",
             f"| Main airfoil | {row['selected_airfoil']} |",
             f"| Tail airfoil | {row['tail_airfoil']} |",
             "",
@@ -2361,6 +2602,7 @@ def write_stage3_readable_results(
             f"| Washout | {float(row['main_wing_washout_deg']):.3f} deg |",
             f"| Propeller axial location | {float(row['prop_axial_location_fraction_of_chord']):.3f} chord from wing LE |",
             f"| Propeller x position | {float(row['prop_axial_x_m']):.3f} m |",
+            f"| Fuselage nose station | {float(row['fuselage_nose_x_m']):.3f} m from wing LE |",
             f"| Fuselage width | {float(row['fuselage_width_m']) * 1000.0:.0f} mm |",
             f"| Fuselage height | {float(row['fuselage_height_m']) * 1000.0:.0f} mm |",
             f"| Flap span fraction | {float(row['flap_span_fraction']):.3f} semispan |",
@@ -2414,6 +2656,12 @@ def write_stage3_readable_results(
             f"| Vertical tail volume range | {float(row['vertical_tail_volume_min']):.3f} to {float(row['vertical_tail_volume_max']):.3f} |",
             f"| CG location | {float(row['cg_x_m']):.3f} m |",
             f"| CG as percent MAC | {float(row['cg_percent_mac']):.2f}% |",
+            f"| CG target location | {float(row['cg_target_x_m']):.3f} m |",
+            f"| CG target as percent MAC | {float(row['cg_target_percent_mac']):.2f}% |",
+            f"| CG error | {float(row['cg_error_m']):.6f} m |",
+            f"| CG error as percent MAC | {float(row['cg_error_percent_mac']):.4f}% |",
+            f"| Required pre-tail baseline CG | {float(row['stage1_baseline_cg_required_percent_mac']):.2f}% MAC |",
+            f"| Used pre-tail baseline CG | {float(row['stage1_baseline_cg_used_percent_mac']):.2f}% MAC |",
             f"| Neutral point | {float(row['neutral_point_x_m']):.3f} m |",
             f"| Static margin | {float(row['static_margin_mac']):.3f} MAC |",
             f"| VLM Cm-alpha | {float(row['vlm_cm_alpha_per_deg']):.5f} per deg |",
@@ -2465,17 +2713,29 @@ def write_stage3_readable_results(
             f"| Slow-flight electrical power | {float(row['low_speed_power_w']):.2f} W |",
             f"| Slow-flight energy for configured segment | {float(row['low_speed_energy_wh']):.2f} Wh |",
             f"| Slow-flight RPM | {float(row['low_speed_rpm']):.0f} rpm |",
+            f"| Slow-flight CT / CP | {float(row['low_speed_ct']):.4f} / {float(row['low_speed_cp']):.4f} |",
             f"| Cruise speed | {mission.cruise_speed_mps:.2f} m/s |",
             f"| Cruise drag | {float(row['cruise_drag_n']):.3f} N |",
             f"| Cruise fuselage drag | {float(row['cruise_fuselage_drag_n']):.3f} N |",
             f"| Cruise electrical power | {float(row['cruise_power_w']):.2f} W |",
             f"| Cruise RPM | {float(row['cruise_rpm']):.0f} rpm |",
+            f"| Cruise CT / CP | {float(row['cruise_ct']):.4f} / {float(row['cruise_cp']):.4f} |",
             f"| Cruise alpha | {float(row['cruise_alpha_deg']):.3f} deg |",
             f"| Cruise CL | {float(row['cruise_cl']):.3f} |",
             f"| Cruise CD | {float(row['cruise_cd']):.4f} |",
             f"| Cruise L/D | {float(row['cruise_l_over_d']):.2f} |",
             f"| Trim lift residual | {float(row['trim_residual_lift_n']):.6f} N |",
             f"| Trim Cm residual | {float(row['trim_residual_cm']):.6f} |",
+            "",
+            "## Reynolds Numbers",
+            "",
+            "Reynolds numbers are computed as `Re = rho * V * characteristic_chord / mu`. The main wing uses the fixed wing chord; the H-tail and V-tail use their trapezoidal mean aerodynamic chords.",
+            "",
+            "| Aero surface | Cruise Re | Slow-flight Re | Characteristic chord |",
+            "| --- | ---: | ---: | --- |",
+            f"| Main wing | {float(row['main_wing_re_cruise']):.0f} | {float(row['main_wing_re_low_speed']):.0f} | main wing chord |",
+            f"| Horizontal stabilizer | {float(row['htail_re_cruise']):.0f} | {float(row['htail_re_low_speed']):.0f} | H-tail MAC |",
+            f"| Vertical stabilizer | {float(row['vtail_re_cruise']):.0f} | {float(row['vtail_re_low_speed']):.0f} | V-tail MAC |",
             "",
             f"Fuselage drag is included as an equivalent parasite drag area: `D_fuselage = q * CdA`, with `CdA = {config.fuselage_cd_area_m2:.3f} m^2`. This reflects the updated {config.fuselage_width_m * 1000.0:.0f} mm x {config.fuselage_height_m * 1000.0:.0f} mm fuselage cross-section with a modest bluff-body drag allowance. At cruise this is added directly to the drag buildup; at slow flight the same equivalent area is added as an explicit increment on top of the Stage 1 flap-down baseline and Stage 3 tail drag.",
             "",
@@ -2678,6 +2938,8 @@ def write_stage3_engineering_tex(
         rf"Main airfoil & wing workflow & {_tex_escape(row['selected_airfoil'])} \\",
         rf"Tail airfoil & Stage 3 config & {_tex_escape(row['tail_airfoil'])} \\",
         rf"Propeller layout & Stage 1/2 fixed & {int(_tex_float(row, 'n_props'))} \(\times\) \SI{{{_tex_float(row, 'prop_diameter_in'):.2f}}}{{in}}, \(P/D={_tex_float(row, 'prop_pitch_ratio'):.2f}\) \\",
+        rf"Propulsion model & Stage 3/eCalc & {_tex_escape(row['propulsion_model_source'])} \\",
+        rf"Fuselage nose station & Stage 3 config & \SI{{{_tex_float(row, 'fuselage_nose_x_m'):.3f}}}{{m}} from wing leading edge \\",
         rf"Low-speed condition & mission config & \SI{{{mission.low_speed_mps:.2f}}}{{m/s}} \\",
         rf"Cruise condition & mission config & \SI{{{mission.cruise_speed_mps:.2f}}}{{m/s}} \\",
         rf"Fuselage cross-section & Stage 3 config & \SI{{{_tex_float(row, 'fuselage_width_m') * 1000.0:.0f}}}{{mm}} \(\times\) \SI{{{_tex_float(row, 'fuselage_height_m') * 1000.0:.0f}}}{{mm}} \\",
@@ -2725,6 +2987,11 @@ def write_stage3_engineering_tex(
             r"\item It reads the wing workflow summary to recover the selected airfoil, flap "
             r"geometry, aileron geometry, propeller spanwise positions, and the Stage~1/2 "
             r"\(C_{L,\max}\) curves."
+        ),
+        (
+            r"\item If enabled in the YAML constraints and the frozen propulsion layout matches, "
+            r"it reads the eCalc static thrust/power table and dynamic design-point \(C_T/C_P\) "
+            r"CSV files to replace the generic propeller surrogate used in early screening."
         ),
         (
             r"\item It optimizes only the tail planform and tail arm. The main wing, propeller "
@@ -2914,6 +3181,16 @@ def write_stage3_engineering_tex(
             "hold speed fixed and vary incidence. Both the clean cruise and flaps-down slow-flight "
             "configurations are plotted."
         ),
+        (
+            "The sweep power curves are drag-balance curves: they answer how much electrical "
+            "power would be required if the propellers had to overcome the plotted section-polar "
+            "drag at each sampled speed or angle of attack. This is not the same number as the "
+            "headline slow-flight blown-lift power, which is the propeller power required to "
+            "generate the needed slipstream velocity at the design slow-flight point. Large "
+            "flaps-down sweep powers therefore indicate that the diagnostic flapped drag polar is "
+            "much more draggy than the Stage~1/2 low-speed baseline used for the actual blown-lift "
+            "operating point."
+        ),
         "",
         r"\section{Assumption Justification}",
         (
@@ -2954,6 +3231,7 @@ def write_stage3_engineering_tex(
         rf"Main wing chord & \(c\) & \SI{{{_tex_float(row, 'wing_chord_m'):.3f}}}{{m}} \\",
         rf"Main wing incidence & \(i_w\) & \SI{{{_tex_float(row, 'main_wing_incidence_deg'):.3f}}}{{deg}} \\",
         rf"Propeller axial position & \(x_p\) & \SI{{{_tex_float(row, 'prop_axial_x_m'):.4f}}}{{m}} \\",
+        rf"Fuselage nose station & \(x_n\) & \SI{{{_tex_float(row, 'fuselage_nose_x_m'):.4f}}}{{m}} \\",
         rf"Horizontal tail span & \(b_h\) & \SI{{{_tex_float(row, 'htail_span_m'):.3f}}}{{m}} \\",
         rf"Horizontal tail root chord & \(c_{{r,h}}\) & \SI{{{_tex_float(row, 'htail_root_chord_m'):.3f}}}{{m}} \\",
         rf"Horizontal tail tip chord & \(c_{{t,h}}\) & \SI{{{_tex_float(row, 'htail_tip_chord_m'):.3f}}}{{m}} \\",
@@ -3009,6 +3287,9 @@ def write_stage3_engineering_tex(
         rf"Mass margin & \SI{{{_tex_float(row, 'mass_budget_margin_kg'):.3f}}}{{kg}} & relative to \SI{{{mission.max_mass_kg:.1f}}}{{kg}} limit \\",
         rf"CG location & \SI{{{_tex_float(row, 'cg_x_m'):.3f}}}{{m}} & from wing leading edge \\",
         rf"CG fraction MAC & {_tex_float(row, 'cg_percent_mac'):.2f}\% & based on rectangular MAC \\",
+        rf"CG target & {_tex_float(row, 'cg_target_percent_mac'):.2f}\% MAC & quarter-chord requirement \\",
+        rf"CG error & \SI{{{_tex_float(row, 'cg_error_m'):.6f}}}{{m}} & actual minus target \\",
+        rf"Required pre-tail baseline CG & {_tex_float(row, 'stage1_baseline_cg_required_percent_mac'):.2f}\% MAC & mass placement before tail foam \\",
         rf"Neutral point & \SI{{{_tex_float(row, 'neutral_point_x_m'):.3f}}}{{m}} & proxy stability model \\",
         rf"Static margin & {_tex_float(row, 'static_margin_mac'):.3f} MAC & target {_tex_float(row, 'static_margin_mac'):.3f} MAC achieved \\",
         rf"Horizontal tail volume & {_tex_float(row, 'horizontal_tail_volume'):.3f} & range {_tex_float(row, 'horizontal_tail_volume_min'):.3f}--{_tex_float(row, 'horizontal_tail_volume_max'):.3f} \\",
@@ -3048,12 +3329,28 @@ def write_stage3_engineering_tex(
         rf"Fuselage drag increment & \SI{{{_tex_float(row, 'low_speed_fuselage_drag_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'cruise_fuselage_drag_n'):.3f}}}{{N}} \\",
         rf"Electrical power & \SI{{{slow_power:.2f}}}{{W}} & \SI{{{cruise_power:.2f}}}{{W}} \\",
         rf"RPM & \num{{{_tex_float(row, 'low_speed_rpm'):.0f}}} & \num{{{_tex_float(row, 'cruise_rpm'):.0f}}} \\",
+        rf"\(C_T/C_P\) & {_tex_float(row, 'low_speed_ct'):.4f} / {_tex_float(row, 'low_speed_cp'):.4f} & {_tex_float(row, 'cruise_ct'):.4f} / {_tex_float(row, 'cruise_cp'):.4f} \\",
         rf"Required/actual blown velocity & \SI{{{_tex_float(row, 'low_speed_required_veff_mps'):.3f}}}{{m/s}} / \SI{{{_tex_float(row, 'low_speed_actual_veff_mps'):.3f}}}{{m/s}} & -- \\",
         rf"Cruise \(C_L/C_D/L/D\) & -- & {_tex_float(row, 'cruise_cl'):.3f} / {_tex_float(row, 'cruise_cd'):.4f} / {_tex_float(row, 'cruise_l_over_d'):.2f} \\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\caption{Low-speed and cruise performance after Stage~3 tail sizing.}",
         r"\label{tab:stage3-performance}",
+        r"\end{table}",
+        "",
+        r"\begin{table}[H]",
+        r"\centering",
+        r"\begin{tabular}{lccc}",
+        r"\toprule",
+        r"Aero surface & Cruise Reynolds number & Slow-flight Reynolds number & Characteristic chord \\",
+        r"\midrule",
+        rf"Main wing & \num{{{_tex_float(row, 'main_wing_re_cruise'):.0f}}} & \num{{{_tex_float(row, 'main_wing_re_low_speed'):.0f}}} & main wing chord \\",
+        rf"Horizontal stabilizer & \num{{{_tex_float(row, 'htail_re_cruise'):.0f}}} & \num{{{_tex_float(row, 'htail_re_low_speed'):.0f}}} & H-tail MAC \\",
+        rf"Vertical stabilizer & \num{{{_tex_float(row, 'vtail_re_cruise'):.0f}}} & \num{{{_tex_float(row, 'vtail_re_low_speed'):.0f}}} & V-tail MAC \\",
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{Reynolds numbers for the main lifting surfaces. Stage~3 uses \(Re=\rho V c/\mu\), with the tail characteristic chord equal to each trapezoidal mean aerodynamic chord.}",
+        r"\label{tab:stage3-reynolds}",
         r"\end{table}",
         "",
         r"\begin{table}[H]",
@@ -3309,6 +3606,42 @@ def refine_stage3_candidate(
         0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2 * mission.wing_area_m2
     )
     slow_energy_wh = geometry["low_speed_power_w"] * mission.climb_segment_min / 60.0
+    main_wing_re_cruise = (
+        mission.air_density_kgpm3
+        * mission.cruise_speed_mps
+        * mission.chord_m
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+    main_wing_re_low_speed = (
+        mission.air_density_kgpm3
+        * mission.low_speed_mps
+        * mission.chord_m
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+    htail_re_cruise = (
+        mission.air_density_kgpm3
+        * mission.cruise_speed_mps
+        * geometry["htail_mac_m"]
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+    htail_re_low_speed = (
+        mission.air_density_kgpm3
+        * mission.low_speed_mps
+        * geometry["htail_mac_m"]
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+    vtail_re_cruise = (
+        mission.air_density_kgpm3
+        * mission.cruise_speed_mps
+        * geometry["vtail_mac_m"]
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+    vtail_re_low_speed = (
+        mission.air_density_kgpm3
+        * mission.low_speed_mps
+        * geometry["vtail_mac_m"]
+        / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
 
     return {
         "rank": 0,
@@ -3331,6 +3664,10 @@ def refine_stage3_candidate(
         "main_wing_washout_deg": config.main_wing_washout_deg,
         "prop_axial_location_fraction_of_chord": config.prop_axial_location_fraction_of_chord,
         "prop_axial_x_m": _prop_axial_x_m(mission, config),
+        "propulsion_model_source": geometry["propulsion_model_source"],
+        "ecalc_static_csv": config.ecalc_static_csv if config.ecalc_propulsion_enabled else "",
+        "ecalc_dynamic_csv": config.ecalc_dynamic_csv if config.ecalc_propulsion_enabled else "",
+        "fuselage_nose_x_m": config.fuselage_nose_x_m,
         "fuselage_width_m": config.fuselage_width_m,
         "fuselage_height_m": config.fuselage_height_m,
         "flap_span_fraction": wing_context["flap_span_fraction"],
@@ -3372,6 +3709,12 @@ def refine_stage3_candidate(
         "vertical_tail_volume_max": _vertical_tail_volume_range(config)[1],
         "cg_x_m": geometry["cg_x_m"],
         "cg_percent_mac": geometry["cg_percent_mac"],
+        "cg_target_x_m": geometry["cg_target_x_m"],
+        "cg_target_percent_mac": geometry["cg_target_percent_mac"],
+        "cg_error_m": geometry["cg_error_m"],
+        "cg_error_percent_mac": geometry["cg_error_percent_mac"],
+        "stage1_baseline_cg_used_percent_mac": geometry["stage1_baseline_cg_used_percent_mac"],
+        "stage1_baseline_cg_required_percent_mac": geometry["stage1_baseline_cg_required_percent_mac"],
         "neutral_point_x_m": geometry["neutral_point_x_m"],
         "static_margin_mac": geometry["static_margin_mac"],
         "vlm_cm_alpha_per_deg": cm_alpha_per_deg,
@@ -3418,6 +3761,8 @@ def refine_stage3_candidate(
         "low_speed_power_w": geometry["low_speed_power_w"],
         "low_speed_energy_wh": slow_energy_wh,
         "low_speed_rpm": geometry["low_speed_rpm"],
+        "low_speed_ct": geometry["low_speed_ct"],
+        "low_speed_cp": geometry["low_speed_cp"],
         "cruise_drag_n": geometry["cruise_drag_n"],
         "cruise_wing_profile_drag_n": geometry["cruise_wing_profile_drag_n"],
         "cruise_wing_induced_drag_n": geometry["cruise_wing_induced_drag_n"],
@@ -3426,6 +3771,8 @@ def refine_stage3_candidate(
         "cruise_fuselage_drag_n": geometry["cruise_fuselage_drag_n"],
         "cruise_power_w": geometry["cruise_power_w"],
         "cruise_rpm": geometry["cruise_rpm"],
+        "cruise_ct": geometry["cruise_ct"],
+        "cruise_cp": geometry["cruise_cp"],
         "cruise_alpha_deg": alpha_trim,
         "cruise_lift_n": vlm_trim.get("L", 0.0),
         "cruise_vlm_induced_drag_n": vlm_trim.get("D", 0.0),
@@ -3437,6 +3784,12 @@ def refine_stage3_candidate(
         "trim_residual_cm": vlm_trim.get("trim_residual_cm", 0.0),
         "section_re_cruise": polars["reynolds_cruise"],
         "section_re_low_speed": polars["reynolds_low"],
+        "main_wing_re_cruise": main_wing_re_cruise,
+        "main_wing_re_low_speed": main_wing_re_low_speed,
+        "htail_re_cruise": htail_re_cruise,
+        "htail_re_low_speed": htail_re_low_speed,
+        "vtail_re_cruise": vtail_re_cruise,
+        "vtail_re_low_speed": vtail_re_low_speed,
         "clean_section_clmax": polars["clean_section_clmax"],
         "flapped_section_clmax": polars["flapped_section_clmax"],
         "geometry_score": geometry["geometry_score"],

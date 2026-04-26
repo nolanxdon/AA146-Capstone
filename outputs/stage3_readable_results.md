@@ -7,11 +7,13 @@ This is the readable results sheet for the fixed-propulsion Stage 3 AeroSandbox 
 | Item | Result |
 | --- | ---: |
 | Status | SUCCESS |
-| Warnings | approach_throttle_saturated |
+| Warnings | approach_throttle_saturated;vlm_lift_trim_residual |
 | Propellers / motors | 10 |
 | Propeller diameter | 5.50 in |
 | Propeller pitch ratio | 0.40 |
 | Propeller family | balanced |
+| Propulsion model | eCalc static table: outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv |
+| eCalc static CSV | `outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv` |
 | Main airfoil | DAE51 |
 | Tail airfoil | naca0008 |
 
@@ -27,6 +29,7 @@ This is the readable results sheet for the fixed-propulsion Stage 3 AeroSandbox 
 | Washout | 0.000 deg |
 | Propeller axial location | -0.250 chord from wing LE |
 | Propeller x position | -0.087 m |
+| Fuselage nose station | -0.175 m from wing LE |
 | Fuselage width | 170 mm |
 | Fuselage height | 130 mm |
 | Flap span fraction | 0.650 semispan |
@@ -39,31 +42,31 @@ This is the readable results sheet for the fixed-propulsion Stage 3 AeroSandbox 
 
 | Dimension | Result |
 | --- | ---: |
-| Span | 0.500 m |
-| Root chord | 0.187 m |
-| Tip chord | 0.146 m |
-| Taper ratio | 0.779 |
-| Area | 0.0834 m^2 |
-| Aspect ratio | 3.000 |
-| Incidence | -5.164 deg |
+| Span | 0.868 m |
+| Root chord | 0.145 m |
+| Tip chord | 0.144 m |
+| Taper ratio | 0.995 |
+| Area | 0.1255 m^2 |
+| Aspect ratio | 6.000 |
+| Incidence | -5.000 deg |
 | Elevator chord fraction | 0.220 chord |
 | Elevator max deflection for sizing | 25.0 deg |
 | Slow pitch control target | 0.180 Cm |
-| Slow pitch control authority | 0.563 Cm |
-| Slow pitch control margin | 212.6% |
+| Slow pitch control authority | 0.721 Cm |
+| Slow pitch control margin | 300.5% |
 
 ## Vertical Stabilizer
 
 | Dimension | Result |
 | --- | ---: |
-| Height/span | 0.238 m |
-| Root chord | 0.267 m |
-| Tip chord | 0.147 m |
-| Taper ratio | 0.550 |
-| Area | 0.0494 m^2 |
-| Aspect ratio | 1.150 |
+| Height/span | 0.358 m |
+| Root chord | 0.145 m |
+| Tip chord | 0.130 m |
+| Taper ratio | 0.897 |
+| Area | 0.0492 m^2 |
+| Aspect ratio | 2.600 |
 | Incidence | 0.000 deg |
-| Rudder chord fraction | 0.439 chord |
+| Rudder chord fraction | 0.409 chord |
 | Rudder max deflection for sizing | 25.0 deg |
 | Slow yaw control target | 0.055 Cn |
 | Slow yaw control authority | 0.055 Cn |
@@ -73,20 +76,26 @@ This is the readable results sheet for the fixed-propulsion Stage 3 AeroSandbox 
 
 | Metric | Result |
 | --- | ---: |
-| Tail arm | 1.468 m |
-| Horizontal tail volume | 0.500 |
+| Tail arm | 1.000 m |
+| Horizontal tail volume | 0.512 |
 | Horizontal tail volume range | 0.500 to 0.950 |
-| Vertical tail volume | 0.052 |
+| Vertical tail volume | 0.035 |
 | Vertical tail volume range | 0.035 to 0.085 |
-| CG location | 0.125 m |
-| CG as percent MAC | 35.61% |
-| Neutral point | 0.170 m |
-| Static margin | 0.131 MAC |
-| VLM Cm-alpha | -0.00993 per deg |
+| CG location | 0.087 m |
+| CG as percent MAC | 25.00% |
+| CG target location | 0.087 m |
+| CG target as percent MAC | 25.00% |
+| CG error | 0.000000 m |
+| CG error as percent MAC | 0.0000% |
+| Required pre-tail baseline CG | 21.01% MAC |
+| Used pre-tail baseline CG | 21.01% MAC |
+| Neutral point | 0.194 m |
+| Static margin | 0.304 MAC |
+| VLM Cm-alpha | -0.02243 per deg |
 | NGX250 foam density | 25.0 kg/m^3 |
 | Main wing foam mass estimate | 0.380 kg |
-| Horizontal tail foam mass | 0.019 kg |
-| Vertical tail foam mass | 0.014 kg |
+| Horizontal tail foam mass | 0.025 kg |
+| Vertical tail foam mass | 0.009 kg |
 | Total tail foam mass | 0.034 kg |
 | Stage 3 built mass | 2.480 kg |
 | Mass budget margin | 2.520 kg |
@@ -96,21 +105,21 @@ This is the readable results sheet for the fixed-propulsion Stage 3 AeroSandbox 
 | Margin / Source | Result |
 | --- | ---: |
 | Slow-flight flap state | Slotted flaps down |
-| CLmax source | `outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/control_surface_summary.csv` |
-| CL curve source | `outputs/wing_workflow/dae51/control_surface_sizing/rank06_n10_d5p5_p2p2_balanced_b3/dae51/total_cl_curve.csv` |
+| CLmax source | `outputs/wing_workflow/dae51/control_surface_sizing/rank01_n10_d5p5_p2p2_balanced_b3/dae51/control_surface_summary.csv` |
+| CL curve source | `outputs/wing_workflow/dae51/control_surface_sizing/rank01_n10_d5p5_p2p2_balanced_b3/dae51/total_cl_curve.csv` |
 | Stage 1/2 no-flap CLmax | 1.418 at alpha 12.13 deg |
 | Stage 1/2 flap-only CLmax | 1.876 at alpha 12.42 deg |
-| Stage 1/2 clean blown CLmax | 5.507 at alpha 12.13 deg |
-| Stage 1/2 flap-down blown CLmax | 5.810 at alpha 12.98 deg |
+| Stage 1/2 clean blown CLmax | 5.545 at alpha 12.13 deg |
+| Stage 1/2 flap-down blown CLmax | 5.828 at alpha 12.70 deg |
 | Stall margin factor | 1.20 |
 | Unblown flap-down CLmax | 1.876 |
-| Blown flap-down CLmax | 5.810 |
+| Blown flap-down CLmax | 5.828 |
 | Design unblown CLmax after stall margin | 1.564 |
-| Design blown CLmax after stall margin | 4.842 |
-| Available slow-flight lift | 327.356 N |
+| Design blown CLmax after stall margin | 4.857 |
+| Available slow-flight lift | 328.661 N |
 | Required lift target with margin | 58.840 N |
-| Slow-flight lift margin | 268.516 N |
-| Slow-flight lift margin percent | 456.4% |
+| Slow-flight lift margin | 269.821 N |
+| Slow-flight lift margin percent | 458.6% |
 | Equivalent unblown flap-down stall speed with margin | 8.552 m/s |
 
 Stage 3 now uses the CLmax values already generated by Stage 1/2. The retained first-pass aerodynamic margin is the `1.20` stall factor, which asks for 20% extra lift capacity to cover gusts, low-Reynolds-number losses, surface waviness, hinge gaps, and uncertainty in the blown-flow model. The older section-CLmax constants remain in `Stage3SizingConfig` only as a fallback if the Stage 1/2 workflow files are missing.
@@ -120,28 +129,40 @@ Stage 3 now uses the CLmax values already generated by Stage 1/2. The retained f
 | Metric | Result |
 | --- | ---: |
 | Slow-flight speed | 4.00 m/s |
-| Required blown velocity | 6.179 m/s |
-| Actual blown velocity from solved RPM | 15.199 m/s |
-| Slow-flight natural drag before drag devices | 11.213 N |
-| Slow-flight blown-lift thrust | 11.775 N |
-| Added drag required for no acceleration | 0.562 N |
-| Slow-flight steady total drag | 11.775 N |
-| Slow steady drag minus cruise drag | 5.734 N |
+| Required blown velocity | 6.169 m/s |
+| Actual blown velocity from solved RPM | 15.206 m/s |
+| Slow-flight natural drag before drag devices | 11.227 N |
+| Slow-flight blown-lift thrust | 11.789 N |
+| Added drag required for no acceleration | 0.561 N |
+| Slow-flight steady total drag | 11.789 N |
+| Slow steady drag minus cruise drag | 5.696 N |
 | Slow-flight fuselage drag increment | 0.108 N |
-| Slow-flight electrical power | 196.19 W |
-| Slow-flight energy for configured segment | 4.90 Wh |
-| Slow-flight RPM | 10116 rpm |
+| Slow-flight electrical power | 174.20 W |
+| Slow-flight energy for configured segment | 4.35 Wh |
+| Slow-flight RPM | 8456 rpm |
+| Slow-flight CT / CP | 0.1269 / 0.0706 |
 | Cruise speed | 10.00 m/s |
-| Cruise drag | 6.041 N |
+| Cruise drag | 6.092 N |
 | Cruise fuselage drag | 0.674 N |
-| Cruise electrical power | 130.99 W |
-| Cruise RPM | 9561 rpm |
-| Cruise alpha | 12.014 deg |
+| Cruise electrical power | 103.11 W |
+| Cruise RPM | 6963 rpm |
+| Cruise CT / CP | 0.0986 / 0.0706 |
+| Cruise alpha | 7.142 deg |
 | Cruise CL | 1.144 |
-| Cruise CD | 0.1409 |
-| Cruise L/D | 8.12 |
-| Trim lift residual | -0.000029 N |
-| Trim Cm residual | -0.000000 |
+| Cruise CD | 0.1421 |
+| Cruise L/D | 8.05 |
+| Trim lift residual | -16.309818 N |
+| Trim Cm residual | -0.006633 |
+
+## Reynolds Numbers
+
+Reynolds numbers are computed as `Re = rho * V * characteristic_chord / mu`. The main wing uses the fixed wing chord; the H-tail and V-tail use their trapezoidal mean aerodynamic chords.
+
+| Aero surface | Cruise Re | Slow-flight Re | Characteristic chord |
+| --- | ---: | ---: | --- |
+| Main wing | 236878 | 94751 | main wing chord |
+| Horizontal stabilizer | 97900 | 39160 | H-tail MAC |
+| Vertical stabilizer | 93204 | 37282 | V-tail MAC |
 
 Fuselage drag is included as an equivalent parasite drag area: `D_fuselage = q * CdA`, with `CdA = 0.011 m^2`. This reflects the updated 170 mm x 130 mm fuselage cross-section with a modest bluff-body drag allowance. At cruise this is added directly to the drag buildup; at slow flight the same equivalent area is added as an explicit increment on top of the Stage 1 flap-down baseline and Stage 3 tail drag.
 
@@ -153,11 +174,11 @@ Slow-flight drag is now force-balanced against the blown-lift propeller thrust. 
 | --- | ---: | ---: |
 | Main wing profile / Stage 1 flap baseline | 0.528 | 11.062 |
 | Main wing induced | 4.739 | Included in Stage 1 baseline |
-| Horizontal tail | 0.063 | 0.029 |
-| Vertical tail | 0.036 | 0.015 |
+| Horizontal tail | 0.115 | 0.043 |
+| Vertical tail | 0.036 | 0.014 |
 | Fuselage | 0.674 | 0.108 |
-| Added drag / airbrakes | 0.000 | 0.562 |
-| Total | 6.041 | 11.775 |
+| Added drag / airbrakes | 0.000 | 0.561 |
+| Total | 6.092 | 11.789 |
 
 Drag-components chart: `outputs/stage3_visuals/rank01_n10_d5p5_pd0p40_balanced_drag_components.png`
 
@@ -172,13 +193,13 @@ The approach model assumes steady flaps-down descent at the target angle in the 
 | Flap deflection | 40.0 deg |
 | Approach alpha | 13.06 deg |
 | Required CL | 4.549 |
-| Approach drag | 45.291 N |
-| Required thrust | 40.165 N |
-| Electrical power | 558.85 W |
+| Approach drag | 45.340 N |
+| Required thrust | 40.214 N |
+| Electrical power | 548.00 W |
 | RPM | 14000 rpm |
 | Throttle estimate | 100.0% |
 | Propulsion feasible at this approach angle | False |
-| Elevator trim | 6.59 deg |
+| Elevator trim | 11.91 deg |
 | Rudder trim | 0.00 deg |
 | Sink rate | 0.523 m/s |
 | Glide-ratio equivalent | 9.51:1 |

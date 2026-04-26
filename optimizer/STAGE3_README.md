@@ -44,9 +44,13 @@ Stage 3 expects Stage 1 and Stage 2 outputs to already exist. The key files are:
 outputs/stage1_pareto_front.csv
 outputs/stage2_prop_span_report.csv
 outputs/wing_workflow/dae51/wing_workflow_summary.csv
+outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv
+outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_dynamic_design_point.csv
 ```
 
 The wing workflow summary points Stage 3 to the selected control-surface and high-lift files. In the normal workflow, Stage 3 reads the flap geometry, aileron geometry, and CLmax values from Stage 1/2 outputs. The fallback values in `stage3_constraints.yaml` are only used if those files are missing.
+
+The eCalc CSVs are optional but preferred. When `ecalc_propulsion_enabled` is true and the frozen propeller count/diameter matches the configured eCalc hardware, Stage 3 uses the eCalc RPM-thrust-power table plus the dynamic CT correction instead of the generic Stage 1 propeller surrogate.
 
 ## What Stage 3 Freezes
 
@@ -105,11 +109,13 @@ The values below live in `optimizer/config/stage3_constraints.yaml` so they can 
 | Horizontal tail volume range | `0.50 to 0.95` | Keeps the H-tail in a conventional small-aircraft range while allowing enough authority for a low-speed, high-lift configuration. |
 | Vertical tail volume range | `0.035 to 0.085` | Typical first-pass range for small fixed-wing aircraft; high enough to avoid a tiny fin, low enough to avoid unnecessary drag and mass. |
 | Target static margin | `0.13 MAC` | A 13% static margin gives a stable but not excessively nose-heavy aircraft. The allowed range is `0.08 to 0.24 MAC`. |
+| Final CG target | `0.25 MAC` | The final aircraft CG is forced to quarter chord after tail foam is added. Stage 3 back-calculates the required pre-tail baseline CG needed to hit this target. |
 | Cruise tail dynamic pressure ratio | `0.90` | The tail is assumed to see slightly less dynamic pressure than freestream due to wake and downwash losses. |
 | Slow tail dynamic pressure ratio | `0.85` | Slow-flight control sizing is made slightly more conservative because flap wake, high alpha, and low Reynolds number can reduce tail effectiveness. |
 | Downwash gradient | `0.35` | First-pass low-aspect-ratio wing estimate for how much wing angle of attack appears as downwash at the tail. |
 | Fuselage drag area | `0.011 m^2` | Approximate equivalent drag area for a 170 mm by 130 mm fuselage cross-section using a modest bluff-body drag allowance. |
 | Tail zero-lift CD | `0.012` | Conservative low-Reynolds-number profile drag estimate for small symmetric tail sections with real construction roughness. |
+| eCalc propulsion calibration | `enabled` | Uses the collaborator's updated eCalc static thrust/power table and dynamic CT/CP point for the frozen 10 x 5.5 in propulsion layout. |
 | Slow-flight stall margin factor | `1.20` | Requires 20% CLmax headroom to cover gusts, build errors, surface waviness, hinge gaps, and uncertainty in the blown-lift model. |
 | Minimum slow lift margin warning | `0.10` | Warns if less than 10% lift margin remains after the 20% stall factor has already been applied. |
 | Elevator and rudder max deflection | `25 deg` | A practical first-pass control authority limit that avoids assuming extreme hinge moments or stalled control surfaces. |
@@ -191,6 +197,8 @@ Each plot includes both:
 - Clean cruise configuration.
 - Flaps-down slow-flight configuration.
 
+Important: the sweep power curves are drag-balance diagnostics. They solve the propeller power needed to overcome the drag predicted by the plotted clean or flapped section-polar buildup at each sweep point. The headline slow-flight power in the result table is a different quantity: it is the propeller power needed to create the blown-lift slipstream at the selected slow-flight design point. If the flaps-down sweep shows much higher power than the slow-flight result, that means the diagnostic flapped drag polar is much draggier than the Stage 1/2 slow-flight baseline used by the blown-lift sizing calculation.
+
 ## Most Useful Result Fields
 
 In `outputs/stage3_aerosandbox_results.csv`, the most important fields are:
@@ -205,6 +213,8 @@ In `outputs/stage3_aerosandbox_results.csv`, the most important fields are:
 | `rudder_chord_fraction` | Rudder chord as fraction of local V-tail chord. |
 | `horizontal_tail_volume`, `vertical_tail_volume` | Tail volume coefficients. |
 | `static_margin_mac` | Static margin in mean aerodynamic chord. |
+| `cg_target_percent_mac`, `cg_percent_mac`, `cg_error_m` | Final CG target, final CG, and residual error. |
+| `stage1_baseline_cg_required_percent_mac` | Pre-tail baseline CG required so the tail-included aircraft lands at quarter chord. |
 | `cruise_drag_n`, `cruise_power_w` | Clean cruise performance. |
 | `low_speed_natural_drag_n` | Slow-flight airframe drag before added drag devices. |
 | `low_speed_added_drag_required_n` | Drag device target to prevent acceleration during blown-lift slow flight. |

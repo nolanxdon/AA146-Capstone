@@ -11,10 +11,12 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 - Main wing span: `2.000 m`
 - Main wing chord: `0.350 m`
 - Main wing area: `0.700 m^2`
+- Fuselage nose station: `-0.175 m` from wing leading edge
 - Fuselage cross-section: `170 mm` wide x `130 mm` tall
 - Low-speed mode: `4.000 m/s`
 - Cruise mode: `10.000 m/s`
 - Foam density: `25.0 kg/m^3`
+- eCalc propulsion calibration enabled: `True`
 
 ## Optimizer Notes
 
@@ -27,54 +29,64 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 - Fuselage drag is included as an equivalent parasite drag area, `CdA = 0.011 m^2`, so `D_fuse = q * CdA`.
 - Tail foam mass is added to the Stage 1/2 built-mass estimate before checking the mass margin.
 - Tail sizing is constrained by horizontal/vertical tail volume, static margin, trim incidence, material mass, and prop RPM feasibility.
-- Cruise power and slow-flight power are both re-solved with the selected propeller surrogate instead of merely scaling the Stage 1 numbers.
+- Cruise power and slow-flight power are both re-solved. If the frozen propulsion layout matches the eCalc calibration files, Stage 3 uses the eCalc thrust/power table and dynamic CT correction; otherwise it falls back to the Stage 1 generic prop surrogate.
 
 ## Recommended Aircraft Dimensions
 
 | Quantity | Value |
 | --- | ---: |
 | Propulsion layout | 10 x 5.5 in, P/D 0.4, balanced |
+| Propulsion model | eCalc static table: outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv |
+| eCalc static CSV | outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv |
 | Main airfoil | DAE51 |
 | Main wing span | 2.000 m |
 | Main wing chord | 0.350 m |
 | Main wing incidence | 0.000 deg |
 | Propeller axial x position | -0.087 m |
+| Fuselage nose station | -0.175 m from wing LE |
 | Fuselage width x height | 170 mm x 130 mm |
-| Horizontal tail span | 0.500 m |
-| Horizontal tail root chord | 0.187 m |
-| Horizontal tail tip chord | 0.146 m |
-| Horizontal tail incidence | -5.164 deg |
+| Horizontal tail span | 0.868 m |
+| Horizontal tail root chord | 0.145 m |
+| Horizontal tail tip chord | 0.144 m |
+| Horizontal tail incidence | -5.000 deg |
 | Elevator chord fraction | 0.220 chord |
-| Vertical tail height/span | 0.238 m |
-| Vertical tail root chord | 0.267 m |
-| Vertical tail tip chord | 0.147 m |
+| Vertical tail height/span | 0.358 m |
+| Vertical tail root chord | 0.145 m |
+| Vertical tail tip chord | 0.130 m |
 | Vertical tail incidence | 0.000 deg |
-| Rudder chord fraction | 0.439 chord |
-| Tail arm | 1.468 m |
-| Static margin | 0.131 MAC |
-| H-tail volume range / actual | 0.500-0.950 / 0.500 |
-| V-tail volume range / actual | 0.035-0.085 / 0.052 |
-| Slow pitch control authority / target | 0.563 / 0.180 Cm |
+| Rudder chord fraction | 0.409 chord |
+| Tail arm | 1.000 m |
+| CG target / actual | 25.00% / 25.00% MAC |
+| Required pre-tail baseline CG | 21.01% MAC |
+| Static margin | 0.304 MAC |
+| H-tail volume range / actual | 0.500-0.950 / 0.512 |
+| V-tail volume range / actual | 0.035-0.085 / 0.035 |
+| Slow pitch control authority / target | 0.721 / 0.180 Cm |
 | Slow yaw control authority / target | 0.055 / 0.055 Cn |
 | Stage 3 built mass | 2.480 kg |
 | Tail foam mass | 0.034 kg |
 | Stage 1/2 no-flap CLmax | 1.418 |
 | Stage 1/2 flap-only CLmax | 1.876 |
-| Stage 1/2 clean blown CLmax | 5.507 |
-| Stage 1/2 flap-down blown CLmax | 5.810 |
+| Stage 1/2 clean blown CLmax | 5.545 |
+| Stage 1/2 flap-down blown CLmax | 5.828 |
 | Slow-flight flap-down CLmax, unblown | 1.876 |
-| Slow-flight flap-down CLmax, blown | 5.810 |
-| Slow-flight lift margin | 456.4% |
+| Slow-flight flap-down CLmax, blown | 5.828 |
+| Slow-flight lift margin | 458.6% |
 | Cruise fuselage drag | 0.674 N |
-| Cruise power | 130.99 W |
-| Slow-flight power | 196.19 W |
-| Slow-flight natural drag before added drag | 11.213 N |
-| Slow-flight added drag required | 0.562 N |
-| Slow-flight steady total drag | 11.775 N |
-| Slow-flight steady drag minus cruise drag | 5.734 N |
+| Cruise power | 103.11 W |
+| Cruise CT / CP | 0.0986 / 0.0706 |
+| Slow-flight power | 174.20 W |
+| Slow-flight CT / CP | 0.1269 / 0.0706 |
+| Slow-flight natural drag before added drag | 11.227 N |
+| Slow-flight added drag required | 0.561 N |
+| Slow-flight steady total drag | 11.789 N |
+| Slow-flight steady drag minus cruise drag | 5.696 N |
+| Main wing Reynolds number, cruise / slow | 236878 / 94751 |
+| H-tail Reynolds number, cruise / slow | 97900 / 39160 |
+| V-tail Reynolds number, cruise / slow | 93204 / 37282 |
 | Approach target angle | 6.00 deg below horizontal |
 | Approach speed | 5.00 m/s |
-| Approach elevator trim | 6.59 deg |
+| Approach elevator trim | 11.91 deg |
 | Approach throttle estimate | 100.0% |
 
 ## Drag Components
@@ -83,11 +95,11 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 | --- | ---: | ---: |
 | Main wing profile / Stage 1 flap baseline | 0.528 | 11.062 |
 | Main wing induced | 4.739 | Included in Stage 1 baseline |
-| Horizontal tail | 0.063 | 0.029 |
-| Vertical tail | 0.036 | 0.015 |
+| Horizontal tail | 0.115 | 0.043 |
+| Vertical tail | 0.036 | 0.014 |
 | Fuselage | 0.674 | 0.108 |
-| Added drag required to cancel blown-lift thrust | 0.000 | 0.562 |
-| Total | 6.041 | 11.775 |
+| Added drag required to cancel blown-lift thrust | 0.000 | 0.561 |
+| Total | 6.092 | 11.789 |
 
 ## Approach Estimate
 
@@ -96,12 +108,12 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 | Target descent angle | 6.00 deg |
 | Flap deflection | 40.0 deg |
 | Approach alpha | 13.06 deg |
-| Required thrust | 40.165 N |
-| Electrical power | 558.85 W |
+| Required thrust | 40.214 N |
+| Electrical power | 548.00 W |
 | RPM | 14000 rpm |
 | Throttle estimate | 100.0% |
 | Propulsion feasible at approach | False |
-| Elevator trim | 6.59 deg |
+| Elevator trim | 11.91 deg |
 | Rudder trim | 0.00 deg |
 | Sink rate | 0.523 m/s |
 
@@ -120,4 +132,4 @@ Stage 3 freezes the selected Stage 1/2 main wing and propulsion layout, then siz
 
 | Rank | Props | Cruise W | Slow W | H-tail span | V-tail height | Mass margin | Static margin |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 10 x 5.5 in balanced | 130.99 | 196.19 | 0.500 | 0.238 | 2.520 | 0.131 |
+| 1 | 10 x 5.5 in balanced | 103.11 | 174.20 | 0.868 | 0.358 | 2.520 | 0.304 |

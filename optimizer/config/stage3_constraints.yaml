@@ -24,8 +24,6 @@ stage3_sizing:
   # main_wing_incidence_deg: geometric main-wing root incidence.
   # main_wing_washout_deg: tip twist relative to root; negative means tip leading edge lower.
   # vertical_tail_incidence_deg: yawed/incidence setting for the vertical tail; usually 0.
-  main_wing_incidence_deg: 0.0
-  main_wing_washout_deg: 0.0
   vertical_tail_incidence_deg: 0.0
 
   # Stage 1/2 control-surface fallback values.
@@ -76,8 +74,8 @@ stage3_sizing:
   # Tail arm and trim-incidence bounds.
   # tail_arm_bounds_m is the distance from main-wing aerodynamic center to tail aerodynamic center.
   # h_tail_incidence_bounds_deg limits the solved horizontal-tail cruise trim incidence.
-  tail_arm_bounds_m: [0.70, 1.55]
-  h_tail_incidence_bounds_deg: [-6.0, 6.0]
+  tail_arm_bounds_m: [0.50, 1.0]
+  h_tail_incidence_bounds_deg: [-5.0, 5.0]
 
   # Tail-volume coefficient constraints.
   # These are the primary user-facing tail-sizing constraints:
@@ -94,16 +92,25 @@ stage3_sizing:
   # Longitudinal stability targets.
   # Static margin is measured in MAC, i.e. (neutral point - CG) / MAC.
   target_static_margin_mac: 0.13
-  min_static_margin_mac: 0.08
-  max_static_margin_mac: 0.24
+  min_static_margin_mac: 0.10
+  max_static_margin_mac: 0.27
 
   # Geometry and aerodynamic coupling assumptions.
-  # baseline_cg_fraction_mac: Stage 1/2 baseline CG before tail foam is added.
+  # baseline_cg_fraction_mac: Stage 1/2 baseline CG before tail foam is added,
+  # used only when enforce_target_cg is false.
+  # enforce_target_cg: if true, Stage 3 back-calculates the required pre-tail
+  # baseline CG so the final CG after tail foam lands at target_cg_fraction_mac.
+  # target_cg_fraction_mac: final aircraft CG target as fraction of main wing chord.
+  # Quarter chord is 0.25, measured from the main wing leading edge.
+  # baseline_cg_fraction_bounds_mac: sanity bounds for the required pre-tail CG.
   # wing_aerodynamic_center_fraction_mac: main-wing AC location from leading edge.
   # prop_axial_location_fraction_of_chord: prop disk x/c from wing leading edge; negative is ahead of LE.
   # tail_dynamic_pressure_ratio: q_tail/q_freestream at cruise for trim/stability.
   # downwash_gradient: d(epsilon)/d(alpha), nondimensional.
-  baseline_cg_fraction_mac: 0.30
+  baseline_cg_fraction_mac: 0.25
+  enforce_target_cg: true
+  target_cg_fraction_mac: 0.25
+  baseline_cg_fraction_bounds_mac: [0.05, 0.45]
   wing_aerodynamic_center_fraction_mac: 0.25
   prop_axial_location_fraction_of_chord: -0.25
   tail_dynamic_pressure_ratio: 0.90
@@ -132,6 +139,21 @@ stage3_sizing:
   stability_weight: 0.10
   reference_cruise_power_w: 120.0
   reference_slow_flight_power_w: 220.0
+
+  # eCalc propeller calibration.
+  # When enabled, Stage 3 replaces the generic Stage 1 prop surrogate with the
+  # measured/eCalc static thrust-power table below for matching frozen hardware.
+  # The current match is the selected 10 x 5.5 in distributed-propulsion layout.
+  # ecalc_static_csv columns are per propeller and must include rpm, thrust_n,
+  # electric_power_w, shaft_power_w, ct_static, and cp_static.
+  # ecalc_dynamic_csv is optional; when present, its CT at the listed advance
+  # ratio is used to reduce static thrust as forward speed increases.
+  ecalc_propulsion_enabled: true
+  ecalc_static_csv: outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv
+  ecalc_dynamic_csv: outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_dynamic_design_point.csv
+  ecalc_reference_n_props: 10
+  ecalc_reference_prop_diameter_in: 5.5
+  ecalc_match_diameter_tolerance_in: 0.05
 
   # Performance-sweep plots generated for the final ranked designs.
   # Velocity sweeps trim CL to support aircraft weight at each speed, then estimate drag and prop power.

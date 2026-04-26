@@ -948,6 +948,23 @@ The current Stage 3 geometry variables are:
 - horizontal-tail volume coefficient
 - vertical-tail volume coefficient
 
+Current Stage 3 freezes the Stage 1/2 wing and propulsion layout, then optimizes
+only the tail planform and tail arm. Its propulsion solve first checks the
+editable eCalc calibration settings in `optimizer/config/stage3_constraints.yaml`.
+When the frozen hardware matches the eCalc calibration, Stage 3 reads:
+
+- `outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv`
+- `outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_dynamic_design_point.csv`
+
+The static table gives per-propeller RPM, thrust, electric power, shaft power,
+static \(C_T\), and static \(C_P\). The dynamic design point gives a measured
+forward-flight \(C_T/C_P\) at the eCalc advance ratio. Stage 3 interpolates the
+static thrust-power table in RPM, applies the dynamic \(C_T\) correction as
+advance ratio increases, and reports the resulting \(C_T/C_P\) in the Stage 3
+CSV and readable reports. If those files are unavailable or the hardware does
+not match the configured propeller count/diameter, Stage 3 falls back to the
+generic Stage 1 propeller surrogate.
+
 Stage 3 uses `asb.Opti` to minimize a weighted geometry score built from:
 
 - low-speed power proxy, scaled from Stage 1 using the refined required blown velocity
