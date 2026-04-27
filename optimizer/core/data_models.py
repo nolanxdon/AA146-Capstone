@@ -22,7 +22,7 @@ class Stage1MissionConfig:
     battery_voltage_v: float = 14.8          # 4S LiPo nominal (4 × 3.7 V); standard for 5-kg-class UAVs
 
     # ---------------- Mission flight conditions ----------------
-    low_speed_mps: float = 4.0               # blown-lift operating point; mission requirement
+    low_speed_mps: float = 4.0               # blown-lift operating point used by Stage 1/2; keep frozen so upstream wing/prop sizing remains unchanged
     cruise_speed_mps: float = 10.0           # mission requirement; corresponds to ~36 km/h
     loiter_time_min: float = 18.0            # endurance requirement; mission requirement
 

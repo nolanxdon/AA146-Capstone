@@ -4,7 +4,7 @@ import csv
 import math
 import os
 import sys
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,18 +34,23 @@ class Stage3SizingConfig:
     foam_density_kgpm3: float = 25.0
 
     main_wing_incidence_deg: float = 0.0
+    main_wing_incidence_bounds_deg: tuple[float, float] = (-2.0, 8.0)
+    target_cruise_body_alpha_deg: float = 0.0
     main_wing_washout_deg: float = 0.0
     vertical_tail_incidence_deg: float = 0.0
 
     flap_span_fraction_default: float = 0.65
     flap_chord_fraction_default: float = 0.34
     flap_deflection_slow_deg: float = 40.0       # Frozen control-sizing result: slotted flaps deployed for all slow-flight sizing.
-    slotted_flap_section_clmax: float = 3.00     # Fallback only if Stage 1/2 CLmax CSVs are missing; normal Stage 3 runs read the selected high-lift CLmax values from the wing workflow.
-    clean_outer_section_clmax: float = 1.45      # Fallback only if Stage 1/2 CLmax CSVs are missing.
+    slotted_flap_section_clmax: float = 2.00     # Fallback only; Stage 3 normally reads Stage 1/2 NeuralFoil slotted-flap section CLmax.
+    clean_outer_section_clmax: float = 1.60      # Fallback only; Stage 3 normally reads Stage 1/2 clean section CLmax.
+    physical_clean_clmax_cap: float = 1.60
+    physical_flapped_clmax_cap: float = 2.00
     flap_down_3d_efficiency: float = 0.90        # Fallback conversion from section CLmax to finite-wing CLmax when workflow CL curves are unavailable.
-    blown_flap_clmax_multiplier: float = 1.10    # Fallback propwash credit when workflow CL curves are unavailable.
+    blown_flap_clmax_multiplier: float = 1.00    # Kept for fallback compatibility; propwash should raise q, not the airfoil CLmax.
     slow_flight_stall_margin_factor: float = 1.20  # Require 20% lift margin at slow flight; common early-design buffer for gusts, build errors, and CLmax uncertainty.
     min_slow_flight_lift_margin: float = 0.10    # Optimization warning threshold: at least 10% extra lift after the 20% sizing factor is preferred.
+    main_wing_pitch_up_stall_margin_factor: float = 1.25  # Require 25% local-CL headroom in review tables so emergency pitch-up does not immediately hit stall.
     aileron_span_fraction_default: float = 0.28
     aileron_chord_fraction_default: float = 0.28
     elevator_chord_fraction: float = 0.30        # Fallback/control-surface reference; final value is sized for slow-flight pitch authority.
@@ -90,7 +95,7 @@ class Stage3SizingConfig:
     prop_axial_location_fraction_of_chord: float = -0.25  # Prop disk x-location relative to the wing leading edge; negative means ahead of the leading edge, matching Stage 1/2 high-lift assumptions.
     tail_dynamic_pressure_ratio: float = 0.90
     downwash_gradient: float = 0.35
-    fuselage_nose_x_m: float = -0.175             # Nose station relative to wing leading edge; -0.175 is 175 mm ahead of the LE.
+    fuselage_nose_x_m: float = -0.300             # Nose station relative to wing leading edge; -0.300 is 300 mm ahead of the LE.
     fuselage_width_m: float = 0.170              # Current structural cross-section width: 170 mm.
     fuselage_height_m: float = 0.130             # Current structural cross-section height: 130 mm.
     fuselage_tail_width_m: float = 0.095
@@ -105,12 +110,20 @@ class Stage3SizingConfig:
     reference_cruise_power_w: float = 120.0
     reference_slow_flight_power_w: float = 220.0
 
+    fixed_propulsion_enabled: bool = True
+    fixed_n_props: int = 10
+    fixed_prop_diameter_in: float = 5.5
+    fixed_prop_pitch_ratio: float = 0.40
+    fixed_prop_family: str = "balanced"
+
     ecalc_propulsion_enabled: bool = True
     ecalc_static_csv: str = "outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_static_partial_load.csv"
     ecalc_dynamic_csv: str = "outputs/ecalc_prop_analysis/x2302_1500kv_3s_5p5x3p5_3b/ecalc_dynamic_design_point.csv"
     ecalc_reference_n_props: int = 10
     ecalc_reference_prop_diameter_in: float = 5.5
     ecalc_match_diameter_tolerance_in: float = 0.05
+    wiring_power_loss_factor: float = 1.08       # Multiplies motor/ESC input power to account for harness, connector, and distribution losses.
+    avionics_power_loss_factor: float = 1.10     # Multiplies the fixed avionics draw to account for BEC/regulator and avionics wiring losses.
 
     performance_sweep_velocity_min_mps: float = 3.5
     performance_sweep_velocity_max_mps: float = 16.0
@@ -118,14 +131,30 @@ class Stage3SizingConfig:
     performance_sweep_alpha_min_deg: float = -4.0
     performance_sweep_alpha_max_deg: float = 18.0
     performance_sweep_alpha_points: int = 89
+    slow_flight_speed_mps: float = 4.0
     clean_sweep_speed_mps: float = 10.0
     flaps_down_sweep_speed_mps: float = 4.0
 
-    approach_target_angle_deg: float = 6.0       # Positive value means degrees below horizontal on approach.
+    approach_target_angle_deg: float = 6.0       # Fallback only if approach_target_sink_rate_fps is nonpositive.
+    approach_target_sink_rate_fps: float = 6.0
     approach_speed_mps: float = 5.0
     approach_flap_deflection_deg: float = 40.0
     approach_max_elevator_trim_deg: float = 20.0
     approach_tail_trim_effectiveness: float = 0.85
+    max_climb_rate_fps: float = 6.0
+    max_descent_rate_fps: float = 6.0
+    climb_trim_speed_mps: float = 10.0
+    climb_flap_deflection_deg: float = 0.0
+    battery_cruise_segment_min: float = 20.0
+    battery_slow_segment_min: float = 1.5
+    mission_profile_battery_cell_count: int = 4
+    mission_profile_cell_nominal_voltage_v: float = 3.7
+    mission_profile_takeoff_time_min: float = 0.75
+    mission_profile_loiter_pre_drop_time_min: float = 10.0
+    mission_profile_drop_low_speed_time_min: float = 1.0
+    mission_profile_loiter_post_drop_time_min: float = 5.0
+    mission_profile_landing_time_min: float = 0.75
+    payload_mass_lb: float = 2.5
 
 
 @dataclass(frozen=True)
@@ -208,6 +237,163 @@ def _tex_path(path_value: Any) -> str:
 
 def _tex_float(row: dict[str, Any], key: str, default: float = 0.0) -> float:
     return _safe_float(row.get(key), default)
+
+
+def _mission_profile_pack_voltage_v(
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> float:
+    configured_voltage = (
+        max(float(config.mission_profile_battery_cell_count), 0.0)
+        * max(config.mission_profile_cell_nominal_voltage_v, 0.0)
+    )
+    return configured_voltage if configured_voltage > 1e-9 else max(mission.battery_voltage_v, 1e-9)
+
+
+def _mission_regime_energy_rows(
+    row: dict[str, Any],
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> list[dict[str, float | str]]:
+    voltage = _mission_profile_pack_voltage_v(mission, config)
+    regime_specs = [
+        (
+            "Takeoff",
+            "payload_on_climb_rpm",
+            "payload_on_climb_power_w",
+            config.mission_profile_takeoff_time_min,
+        ),
+        (
+            "Loiter pre-drop",
+            "payload_on_cruise_rpm",
+            "payload_on_cruise_power_w",
+            config.mission_profile_loiter_pre_drop_time_min,
+        ),
+        (
+            "Drop / low-speed",
+            "payload_on_slow_rpm",
+            "payload_on_slow_power_w",
+            config.mission_profile_drop_low_speed_time_min,
+        ),
+        (
+            "Loiter post-drop",
+            "post_delivery_cruise_rpm",
+            "post_delivery_cruise_power_w",
+            config.mission_profile_loiter_post_drop_time_min,
+        ),
+        (
+            "Landing",
+            "post_delivery_slow_rpm",
+            "post_delivery_slow_power_w",
+            config.mission_profile_landing_time_min,
+        ),
+    ]
+    rows: list[dict[str, float | str]] = []
+    for regime, rpm_key, power_key, time_min in regime_specs:
+        power_w = _tex_float(row, power_key)
+        energy_wh = power_w * max(time_min, 0.0) / 60.0
+        current_a = power_w / voltage
+        used_mah = energy_wh / voltage * 1000.0
+        rows.append(
+            {
+                "regime": regime,
+                "rpm": _tex_float(row, rpm_key),
+                "time_min": time_min,
+                "power_w": power_w,
+                "current_a": current_a,
+                "energy_wh": energy_wh,
+                "used_mah": used_mah,
+                "pack_percent": 0.0,
+            }
+        )
+    total_energy_wh = sum(float(item["energy_wh"]) for item in rows)
+    total_used_mah = sum(float(item["used_mah"]) for item in rows)
+    capacity_required_mah = total_used_mah / max(1.0 - mission.battery_reserve_fraction, 1e-9)
+    capacity_required_mah = max(capacity_required_mah, 1e-9)
+    for item in rows:
+        item["pack_percent"] = 100.0 * float(item["used_mah"]) / capacity_required_mah
+    rows.append(
+        {
+            "regime": "Total",
+            "rpm": float("nan"),
+            "time_min": sum(float(item["time_min"]) for item in rows),
+            "power_w": float("nan"),
+            "current_a": float("nan"),
+            "energy_wh": total_energy_wh,
+            "used_mah": total_used_mah,
+            "pack_percent": 100.0 * total_used_mah / capacity_required_mah,
+        }
+    )
+    return rows
+
+
+def _mission_regime_energy_summary(
+    row: dict[str, Any],
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> dict[str, float]:
+    rows = _mission_regime_energy_rows(row, mission, config)
+    total = rows[-1]
+    voltage = _mission_profile_pack_voltage_v(mission, config)
+    usable_energy_wh = float(total["energy_wh"])
+    used_capacity_mah = float(total["used_mah"])
+    capacity_required_wh = usable_energy_wh / max(1.0 - mission.battery_reserve_fraction, 1e-9)
+    capacity_required_mah = capacity_required_wh / voltage * 1000.0
+    return {
+        "mission_profile_battery_cell_count": float(config.mission_profile_battery_cell_count),
+        "mission_profile_cell_nominal_voltage_v": config.mission_profile_cell_nominal_voltage_v,
+        "mission_profile_pack_voltage_v": voltage,
+        "mission_profile_usable_energy_wh": usable_energy_wh,
+        "mission_profile_used_capacity_mah": used_capacity_mah,
+        "mission_profile_capacity_required_wh": capacity_required_wh,
+        "mission_profile_capacity_required_mah": capacity_required_mah,
+        "mission_profile_reserve_fraction": mission.battery_reserve_fraction,
+    }
+
+
+def _mission_regime_markdown_lines(
+    row: dict[str, Any],
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> list[str]:
+    lines = [
+        "| Regime | RPM | Time [min] | Total P [W] | Total I [A] | Energy [Wh] | Used [mAh] | % of sized 4S pack |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for item in _mission_regime_energy_rows(row, mission, config):
+        is_total = item["regime"] == "Total"
+        rpm = "--" if is_total else f"{float(item['rpm']):.0f}"
+        power = "--" if is_total else f"{float(item['power_w']):.0f}"
+        current = "--" if is_total else f"{float(item['current_a']):.1f}"
+        lines.append(
+            f"| {item['regime']} | {rpm} | {float(item['time_min']):.2f} | {power} | "
+            f"{current} | {float(item['energy_wh']):.2f} | {float(item['used_mah']):.0f} | "
+            f"{float(item['pack_percent']):.2f}% |"
+        )
+    return lines
+
+
+def _mission_regime_tex_lines(
+    row: dict[str, Any],
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> list[str]:
+    lines: list[str] = []
+    for item in _mission_regime_energy_rows(row, mission, config):
+        if item["regime"] == "Total":
+            lines.append(
+                rf"\textbf{{Total}} & -- & \textbf{{{float(item['time_min']):.2f}}} & -- & -- & "
+                rf"\textbf{{{float(item['energy_wh']):.2f}}} & \textbf{{{float(item['used_mah']):.0f}}} & "
+                rf"\textbf{{{float(item['pack_percent']):.2f}\%}} \\"
+            )
+            continue
+        lines.append(
+            rf"{_tex_escape(str(item['regime']))} & \num{{{float(item['rpm']):.0f}}} & "
+            rf"{float(item['time_min']):.2f} & {float(item['power_w']):.0f} & "
+            rf"{float(item['current_a']):.1f} & {float(item['energy_wh']):.2f} & "
+            rf"{float(item['used_mah']):.0f} & {float(item['pack_percent']):.2f}\% \\"
+        )
+    return lines
 
 
 def _repo_root() -> Path:
@@ -386,6 +572,58 @@ def _candidate_matches_ecalc(config: Stage3SizingConfig, candidate: Stage1Candid
     )
 
 
+def _effective_rpm_bounds_for_prop_model(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    rpm_bounds: tuple[int, int],
+    config: Stage3SizingConfig,
+) -> tuple[float, float]:
+    lower, upper = [float(v) for v in rpm_bounds]
+    if config.ecalc_propulsion_enabled and _candidate_matches_ecalc(config, candidate):
+        calibration = _load_ecalc_prop_calibration(config)
+        if calibration is not None and calibration.get("table"):
+            table = calibration["table"]
+            lower = max(lower, float(table[0]["rpm"]))
+            upper = min(upper, float(table[-1]["rpm"]))
+    if upper < lower:
+        upper = lower
+    return lower, upper
+
+
+def _stage3_power_loss_breakdown(
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+    propulsion_electric_power_w: float,
+) -> dict[str, float]:
+    propulsion_base_w = max(propulsion_electric_power_w, 0.0)
+    avionics_base_w = max(mission.avionics_power_w, 0.0)
+    wiring_factor = max(config.wiring_power_loss_factor, 0.0)
+    avionics_factor = max(config.avionics_power_loss_factor, 0.0)
+    propulsion_with_wiring_w = propulsion_base_w * wiring_factor
+    avionics_with_losses_w = avionics_base_w * avionics_factor
+    total_power_w = propulsion_with_wiring_w + avionics_with_losses_w
+    return {
+        "propulsion_electric_power_without_aircraft_losses_w": propulsion_base_w,
+        "propulsion_wiring_loss_w": propulsion_with_wiring_w - propulsion_base_w,
+        "avionics_power_without_losses_w": avionics_base_w,
+        "avionics_power_with_losses_w": avionics_with_losses_w,
+        "avionics_power_loss_w": avionics_with_losses_w - avionics_base_w,
+        "aircraft_power_losses_w": total_power_w - propulsion_base_w - avionics_base_w,
+        "power_electric_total_w": total_power_w,
+    }
+
+
+def _apply_stage3_power_losses_to_operating_point(
+    op: dict[str, float],
+    mission: Stage1MissionConfig,
+    config: Stage3SizingConfig,
+) -> dict[str, float]:
+    propulsion_power_w = max(op.get("power_electric_total_w", 0.0) - mission.avionics_power_w, 0.0)
+    updated = dict(op)
+    updated.update(_stage3_power_loss_breakdown(mission, config, propulsion_power_w))
+    return updated
+
+
 def _stage3_prop_operating_point(
     mission: Stage1MissionConfig,
     candidate: Stage1Candidate,
@@ -395,18 +633,21 @@ def _stage3_prop_operating_point(
 ) -> dict[str, float]:
     if not config.ecalc_propulsion_enabled or not _candidate_matches_ecalc(config, candidate):
         op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op = _apply_stage3_power_losses_to_operating_point(op, mission, config)
         op["propulsion_model_source"] = "Stage 1 generic prop surrogate"
         return op
 
     calibration = _load_ecalc_prop_calibration(config)
     if calibration is None:
         op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op = _apply_stage3_power_losses_to_operating_point(op, mission, config)
         op["propulsion_model_source"] = "Stage 1 generic prop surrogate; eCalc files unavailable"
         return op
 
     n_rev_per_sec = rpm / 60.0
     if n_rev_per_sec <= 1e-12:
         op = prop_operating_point(mission, candidate, rpm, flight_speed_mps)
+        op = _apply_stage3_power_losses_to_operating_point(op, mission, config)
         op["propulsion_model_source"] = calibration["source"]
         return op
 
@@ -434,7 +675,8 @@ def _stage3_prop_operating_point(
     thrust_per_prop = static_thrust_per_prop * thrust_factor
     thrust_total = candidate.n_props * thrust_per_prop
     shaft_power_total = candidate.n_props * shaft_power_per_prop
-    electric_power_total = candidate.n_props * electric_power_per_prop + mission.avionics_power_w
+    propulsion_electric_power_total = candidate.n_props * electric_power_per_prop
+    power_losses = _stage3_power_loss_breakdown(mission, config, propulsion_electric_power_total)
     torque_per_prop = shaft_power_per_prop / max(2.0 * math.pi * n_rev_per_sec, 1e-9)
     tip_speed = math.sqrt((math.pi * candidate.prop_diameter_m * n_rev_per_sec) ** 2 + flight_speed_mps**2)
     tip_mach = tip_speed / mission.speed_of_sound_mps
@@ -454,7 +696,8 @@ def _stage3_prop_operating_point(
         "thrust_total_n": thrust_total,
         "power_shaft_total_w": shaft_power_total,
         "power_shaft_per_prop_w": shaft_power_per_prop,
-        "power_electric_total_w": electric_power_total,
+        "power_electric_total_w": power_losses["power_electric_total_w"],
+        **power_losses,
         "torque_per_prop_nm": torque_per_prop,
         "tip_mach": tip_mach,
         "blade_reynolds": blade_re,
@@ -480,6 +723,24 @@ def _curve_column_peak(
             best_cl = value
             best_alpha = _safe_float(row.get("alpha_deg"), float("nan"))
     return best_cl, best_alpha
+
+
+def _matching_flap_sweep_row(
+    rows: list[dict[str, str]],
+    flap_span_fraction: float,
+    flap_chord_fraction: float,
+    flap_deflection_deg: float,
+) -> dict[str, str] | None:
+    if not rows:
+        return None
+    return min(
+        rows,
+        key=lambda row: (
+            abs(_safe_float(row.get("flap_span_fraction"), flap_span_fraction) - flap_span_fraction)
+            + abs(_safe_float(row.get("flap_chord_fraction"), flap_chord_fraction) - flap_chord_fraction)
+            + 0.02 * abs(_safe_float(row.get("flap_deflection_deg"), flap_deflection_deg) - flap_deflection_deg)
+        ),
+    )
 
 
 def _matching_motor_trade_row(
@@ -516,6 +777,16 @@ def _apply_stage_high_lift_context(
             "flap_only_clmax_alpha_deg": None,
             "clean_blowing_clmax_alpha_deg": None,
             "flap_down_blown_clmax_alpha_deg": None,
+            "total_cl_curve_rows": [],
+            "flap_sweep_source": "",
+            "stage12_clean_section_clmax_unblown": None,
+            "stage12_clean_section_clmax_blown": None,
+            "stage12_flapped_section_clmax_unblown": None,
+            "stage12_flapped_section_clmax_blown": None,
+            "stage12_slot_gain": None,
+            "stage12_flap_area_m2": None,
+            "stage12_blown_flap_area_m2": None,
+            "stage12_blown_clean_area_m2": None,
         }
     )
 
@@ -537,9 +808,53 @@ def _apply_stage_high_lift_context(
         )
         curve_path = _csv_path(control_row.get("total_cl_curve_csv"))
 
+        flap_sweep_path = control_path.with_name("flap_sweep.csv") if control_path else None
+        flap_sweep_rows = load_csv_rows(flap_sweep_path) if flap_sweep_path and flap_sweep_path.exists() else []
+        flap_sweep_row = _matching_flap_sweep_row(
+            flap_sweep_rows,
+            _safe_float(control_row.get("recommended_flap_span_fraction"), context["flap_span_fraction"]),
+            _safe_float(control_row.get("recommended_flap_chord_fraction"), context["flap_chord_fraction"]),
+            _safe_float(control_row.get("recommended_flap_deflection_deg"), context["flap_deflection_slow_deg"]),
+        )
+        if flap_sweep_row:
+            context["flap_sweep_source"] = str(flap_sweep_path)
+            context["stage12_clean_section_clmax_unblown"] = _safe_float(
+                flap_sweep_row.get("clean_clmax_unblown"),
+                context["stage12_clean_section_clmax_unblown"],
+            )
+            context["stage12_clean_section_clmax_blown"] = _safe_float(
+                flap_sweep_row.get("clean_clmax_blown"),
+                context["stage12_clean_section_clmax_blown"],
+            )
+            context["stage12_flapped_section_clmax_unblown"] = _safe_float(
+                flap_sweep_row.get("flapped_clmax_unblown"),
+                context["stage12_flapped_section_clmax_unblown"],
+            )
+            context["stage12_flapped_section_clmax_blown"] = _safe_float(
+                flap_sweep_row.get("flapped_clmax_blown"),
+                context["stage12_flapped_section_clmax_blown"],
+            )
+            context["stage12_slot_gain"] = _safe_float(
+                flap_sweep_row.get("slot_gain"),
+                context["stage12_slot_gain"],
+            )
+            context["stage12_flap_area_m2"] = _safe_float(
+                flap_sweep_row.get("flap_area_m2"),
+                context["stage12_flap_area_m2"],
+            )
+            context["stage12_blown_flap_area_m2"] = _safe_float(
+                flap_sweep_row.get("blown_flap_area_m2"),
+                context["stage12_blown_flap_area_m2"],
+            )
+            context["stage12_blown_clean_area_m2"] = _safe_float(
+                flap_sweep_row.get("blown_clean_area_m2"),
+                context["stage12_blown_clean_area_m2"],
+            )
+
     curve_rows = load_csv_rows(curve_path) if curve_path else []
     if curve_rows:
         context["clmax_curve_source"] = str(curve_path)
+        context["total_cl_curve_rows"] = curve_rows
         curve_columns = {
             "no_flap_clmax": "cl_clean_baseline",
             "flap_only_clmax": "cl_flap_only",
@@ -607,6 +922,16 @@ def load_selected_wing_context(
         "flap_only_clmax_alpha_deg": None,
         "clean_blowing_clmax_alpha_deg": None,
         "flap_down_blown_clmax_alpha_deg": None,
+        "total_cl_curve_rows": [],
+        "flap_sweep_source": "",
+        "stage12_clean_section_clmax_unblown": None,
+        "stage12_clean_section_clmax_blown": None,
+        "stage12_flapped_section_clmax_unblown": None,
+        "stage12_flapped_section_clmax_blown": None,
+        "stage12_slot_gain": None,
+        "stage12_flap_area_m2": None,
+        "stage12_blown_flap_area_m2": None,
+        "stage12_blown_clean_area_m2": None,
         "source": "Stage3SizingConfig defaults",
     }
 
@@ -623,6 +948,18 @@ def load_selected_wing_context(
             if prop_diameter_in > 1e-9 and prop_pitch_in > 1e-9
             else None
         )
+        if config.fixed_propulsion_enabled:
+            workflow_matches_fixed_propulsion = all(
+                (
+                    int(float(row["n_props"])) == int(config.fixed_n_props),
+                    abs(prop_diameter_in - config.fixed_prop_diameter_in) <= 5e-3,
+                    prop_pitch_ratio is not None
+                    and abs(prop_pitch_ratio - config.fixed_prop_pitch_ratio) <= 5e-3,
+                    row.get("prop_family") == config.fixed_prop_family,
+                )
+            )
+            if not workflow_matches_fixed_propulsion:
+                continue
         context.update(
             {
                 "selected_airfoil": row.get("airfoil", context["selected_airfoil"]),
@@ -668,6 +1005,57 @@ def _finite_wing_lift_slope_per_rad(aspect_ratio: float) -> float:
     return 2.0 * math.pi * aspect_ratio / max(aspect_ratio + 2.0, 1e-9)
 
 
+def _workflow_curve_polar(
+    wing_context: dict[str, Any],
+    mode: str,
+) -> dict[str, Any] | None:
+    rows = wing_context.get("total_cl_curve_rows") or []
+    if not rows:
+        return None
+    if mode == "flaps_down":
+        columns = {
+            "CL": "cl_all_high_lift",
+            "CD": "cd_all_high_lift",
+            "CM": "cm_all_high_lift",
+        }
+    elif mode == "clean":
+        columns = {
+            "CL": "cl_clean_baseline",
+            "CD": "cd_clean_baseline",
+            "CM": "cm_clean_baseline",
+        }
+    else:
+        return None
+
+    alpha: list[float] = []
+    cl: list[float] = []
+    cd: list[float] = []
+    cm: list[float] = []
+    for row in rows:
+        a = _safe_float(row.get("alpha_deg"), float("nan"))
+        values = {
+            key: _safe_float(row.get(column), float("nan"))
+            for key, column in columns.items()
+        }
+        if math.isnan(a) or any(math.isnan(value) for value in values.values()):
+            continue
+        alpha.append(a)
+        cl.append(values["CL"])
+        cd.append(values["CD"])
+        cm.append(values["CM"])
+    if not alpha:
+        return None
+    runtime = ensure_stage3_runtime()
+    order = runtime.onp.argsort(runtime.onp.asarray(alpha, dtype=float))
+    return {
+        "alpha_deg": runtime.onp.asarray(alpha, dtype=float)[order],
+        "CL": runtime.onp.asarray(cl, dtype=float)[order],
+        "CD": runtime.onp.asarray(cd, dtype=float)[order],
+        "CM": runtime.onp.asarray(cm, dtype=float)[order],
+        "source": wing_context.get("clmax_curve_source", ""),
+    }
+
+
 def _airfoil_area_coefficient(airfoil_name: str) -> float:
     runtime = ensure_stage3_runtime()
     coords = runtime.onp.asarray(runtime.asb.Airfoil(airfoil_name).coordinates, dtype=float)
@@ -696,6 +1084,7 @@ def _make_tail_geometry_from_variables(values: list[float] | tuple[float, ...]) 
         v_aspect_ratio,
         v_taper,
         tail_arm,
+        main_wing_incidence_deg,
     ) = [float(v) for v in values]
 
     h_span = math.sqrt(max(h_area * h_aspect_ratio, 1e-9))
@@ -722,6 +1111,7 @@ def _make_tail_geometry_from_variables(values: list[float] | tuple[float, ...]) 
         "vtail_tip_chord_m": v_tip_chord,
         "vtail_mac_m": _trapezoid_mac(v_root_chord, v_tip_chord),
         "tail_arm_m": tail_arm,
+        "main_wing_incidence_deg": main_wing_incidence_deg,
     }
 
 
@@ -734,6 +1124,7 @@ def _optimization_bounds(config: Stage3SizingConfig) -> list[tuple[float, float]
         config.v_tail_aspect_ratio_bounds,
         config.v_tail_taper_bounds,
         config.tail_arm_bounds_m,
+        config.main_wing_incidence_bounds_deg,
     ]
 
 
@@ -752,7 +1143,16 @@ def _seed_vectors(
         ):
             h_area = vh * mission.wing_area_m2 * mission.chord_m / tail_arm
             v_area = vv * mission.wing_area_m2 * mission.span_m / tail_arm
-            raw = [h_area, h_ar, 0.75, v_area, v_ar, 0.72, tail_arm]
+            raw = [
+                h_area,
+                h_ar,
+                0.75,
+                v_area,
+                v_ar,
+                0.72,
+                tail_arm,
+                config.main_wing_incidence_deg,
+            ]
             seeds.append([
                 _clamp(value, lower, upper)
                 for value, (lower, upper) in zip(raw, bounds)
@@ -786,6 +1186,10 @@ def _slow_flap_deflection_deg(
     return _safe_float(wing_context.get("flap_deflection_slow_deg"), config.flap_deflection_slow_deg)
 
 
+def _stage3_slow_flight_speed_mps(config: Stage3SizingConfig) -> float:
+    return max(config.slow_flight_speed_mps, 1e-6)
+
+
 def _prop_axial_x_m(
     mission: Stage1MissionConfig,
     config: Stage3SizingConfig,
@@ -811,7 +1215,12 @@ def _flap_down_clmax_values(
     wing_context: dict[str, Any],
     config: Stage3SizingConfig,
 ) -> dict[str, Any]:
-    """Whole-wing CLmax values from the selected Stage 1/2 high-lift workflow."""
+    """Physical CLmax values for the selected Stage 1/2 high-lift workflow.
+
+    Stage 1/2 already generates NeuralFoil/slotted-flap CL-alpha curves and
+    combined whole-wing high-lift curves. Use those first. The YAML values are
+    only fallback caps if the workflow artifacts are not present.
+    """
 
     flap_span_fraction = _clamp(_safe_float(wing_context.get("flap_span_fraction"), 0.65), 0.0, 1.0)
     fallback_unblown = config.flap_down_3d_efficiency * (
@@ -819,17 +1228,91 @@ def _flap_down_clmax_values(
         + (1.0 - flap_span_fraction) * config.clean_outer_section_clmax
     )
     fallback_blown = config.blown_flap_clmax_multiplier * fallback_unblown
-    no_flap = _safe_float(wing_context.get("no_flap_clmax"), config.clean_outer_section_clmax)
-    flap_only = _safe_float(wing_context.get("flap_only_clmax"), fallback_unblown)
-    clean_blowing = _safe_float(wing_context.get("clean_blowing_clmax"), no_flap)
-    blown = _safe_float(wing_context.get("flap_down_blown_clmax"), fallback_blown)
+    raw_no_flap = _safe_float(wing_context.get("no_flap_clmax"), config.clean_outer_section_clmax)
+    raw_flap_only = _safe_float(wing_context.get("flap_only_clmax"), fallback_unblown)
+    raw_clean_blowing = _safe_float(wing_context.get("clean_blowing_clmax"), raw_no_flap)
+    raw_blown = _safe_float(wing_context.get("flap_down_blown_clmax"), fallback_blown)
+
+    clean_section_unblown = _safe_float(
+        wing_context.get("stage12_clean_section_clmax_unblown"),
+        config.physical_clean_clmax_cap,
+    )
+    clean_section_blown = _safe_float(
+        wing_context.get("stage12_clean_section_clmax_blown"),
+        clean_section_unblown,
+    )
+    flapped_section_unblown = _safe_float(
+        wing_context.get("stage12_flapped_section_clmax_unblown"),
+        config.physical_flapped_clmax_cap,
+    )
+    flapped_section_blown = _safe_float(
+        wing_context.get("stage12_flapped_section_clmax_blown"),
+        flapped_section_unblown,
+    )
+    stage12_section_available = bool(wing_context.get("flap_sweep_source")) and all(
+        value > 0.0 and not math.isnan(value)
+        for value in (
+            clean_section_unblown,
+            clean_section_blown,
+            flapped_section_unblown,
+            flapped_section_blown,
+        )
+    )
+
+    blown_clean_area = _safe_float(wing_context.get("stage12_blown_clean_area_m2"), float("nan"))
+    blown_flap_area = _safe_float(wing_context.get("stage12_blown_flap_area_m2"), float("nan"))
+    if (
+        stage12_section_available
+        and not math.isnan(blown_clean_area)
+        and not math.isnan(blown_flap_area)
+        and blown_clean_area + blown_flap_area > 1e-9
+    ):
+        physical_blown_cap = (
+            blown_clean_area * clean_section_blown
+            + blown_flap_area * flapped_section_blown
+        ) / (blown_clean_area + blown_flap_area)
+    else:
+        physical_blown_cap = flapped_section_blown if stage12_section_available else config.physical_flapped_clmax_cap
+
+    no_flap_cap = clean_section_unblown if stage12_section_available else config.physical_clean_clmax_cap
+    flap_only_cap = flapped_section_unblown if stage12_section_available else config.physical_flapped_clmax_cap
+    clean_blowing_cap = clean_section_blown if stage12_section_available else config.physical_clean_clmax_cap
+    cap_source = (
+        wing_context.get("flap_sweep_source")
+        if stage12_section_available
+        else "Stage3SizingConfig physical CLmax fallback"
+    )
+
+    no_flap = min(raw_no_flap, no_flap_cap)
+    flap_only = min(raw_flap_only, flap_only_cap)
+    clean_blowing = min(raw_clean_blowing, clean_blowing_cap)
+    blown = min(raw_blown, physical_blown_cap)
     unblown = flap_only
     design_unblown = unblown / max(config.slow_flight_stall_margin_factor, 1e-9)
     design_blown = blown / max(config.slow_flight_stall_margin_factor, 1e-9)
+    was_capped = any(
+        raw > capped + 1e-9
+        for raw, capped in (
+            (raw_no_flap, no_flap),
+            (raw_flap_only, flap_only),
+            (raw_clean_blowing, clean_blowing),
+            (raw_blown, blown),
+        )
+    )
     return {
         "flap_span_fraction": flap_span_fraction,
         "source": wing_context.get("clmax_source", "Stage3SizingConfig fallback"),
         "curve_source": wing_context.get("clmax_curve_source", ""),
+        "physical_clmax_source": cap_source,
+        "stage12_clean_section_clmax_unblown": clean_section_unblown,
+        "stage12_clean_section_clmax_blown": clean_section_blown,
+        "stage12_flapped_section_clmax_unblown": flapped_section_unblown,
+        "stage12_flapped_section_clmax_blown": flapped_section_blown,
+        "stage12_weighted_blown_physical_clmax": physical_blown_cap,
+        "raw_no_flap_clmax": raw_no_flap,
+        "raw_flap_only_clmax": raw_flap_only,
+        "raw_clean_blowing_clmax": raw_clean_blowing,
+        "raw_flap_down_blown_clmax": raw_blown,
         "no_flap_clmax": no_flap,
         "flap_only_clmax": flap_only,
         "clean_blowing_clmax": clean_blowing,
@@ -842,6 +1325,7 @@ def _flap_down_clmax_values(
         "blown_clmax": blown,
         "design_unblown_clmax": design_unblown,
         "design_blown_clmax": design_blown,
+        "clmax_was_capped": 1.0 if was_capped else 0.0,
     }
 
 
@@ -869,7 +1353,7 @@ def _solve_prop_power_for_thrust(
     rpm_bounds: tuple[int, int],
     config: Stage3SizingConfig,
 ) -> dict[str, float]:
-    lower, upper = [float(v) for v in rpm_bounds]
+    lower, upper = _effective_rpm_bounds_for_prop_model(mission, candidate, rpm_bounds, config)
 
     def residual(rpm: float) -> float:
         return _stage3_prop_operating_point(mission, candidate, rpm, velocity_mps, config)["thrust_total_n"] - thrust_required_n
@@ -921,7 +1405,8 @@ def _evaluate_tail_proxy(
 ) -> dict[str, Any]:
     geometry = _make_tail_geometry_from_variables(values)
     q_cruise = 0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2
-    q_low = 0.5 * mission.air_density_kgpm3 * mission.low_speed_mps**2
+    slow_flight_speed = _stage3_slow_flight_speed_mps(config)
+    q_low = 0.5 * mission.air_density_kgpm3 * slow_flight_speed**2
     s_wing = mission.wing_area_m2
     mac = mission.chord_m
     aspect_ratio = mission.aspect_ratio
@@ -972,17 +1457,23 @@ def _evaluate_tail_proxy(
     cg_error_m = cg_x - target_cg_x
     required_base_cg_fraction = required_base_cg_x / max(mac, 1e-9)
 
+    main_wing_incidence_deg = geometry["main_wing_incidence_deg"]
     cl_wing_cruise = weight_n / max(q_cruise * s_wing, 1e-9)
-    alpha_wing = _alpha_for_cl(main_polar, cl_wing_cruise)
-    cm_wing = _interp_polar(main_polar, "CM", alpha_wing)
-    cd_profile = max(_interp_polar(main_polar, "CD", alpha_wing), 0.006)
+    alpha_wing_section = _alpha_for_cl(main_polar, cl_wing_cruise)
+    cruise_body_alpha_proxy_deg = alpha_wing_section - main_wing_incidence_deg
+    cm_wing = _interp_polar(main_polar, "CM", alpha_wing_section)
+    cd_profile = max(_interp_polar(main_polar, "CD", alpha_wing_section), 0.006)
 
     tail_cl_cruise = (
         cm_wing + cl_wing_cruise * (cg_fraction - config.wing_aerodynamic_center_fraction_mac)
     ) / max(config.tail_dynamic_pressure_ratio * h_volume, 1e-9)
     tail_lift_slope = _finite_wing_lift_slope_per_rad(geometry["htail_aspect_ratio"])
-    downwash_deg = config.downwash_gradient * alpha_wing
-    htail_incidence_deg = math.degrees(tail_cl_cruise / max(tail_lift_slope, 1e-9)) - alpha_wing + downwash_deg
+    downwash_deg = config.downwash_gradient * alpha_wing_section
+    htail_incidence_deg = (
+        math.degrees(tail_cl_cruise / max(tail_lift_slope, 1e-9))
+        - cruise_body_alpha_proxy_deg
+        + downwash_deg
+    )
 
     wing_lift_slope = _finite_wing_lift_slope_per_rad(aspect_ratio)
     x_np = wing_ac_x + (
@@ -1021,12 +1512,31 @@ def _evaluate_tail_proxy(
         mission.cruise_rpm_bounds,
         config,
     )
+    cruise_max_op = _stage3_prop_operating_point(
+        mission,
+        candidate,
+        _effective_rpm_bounds_for_prop_model(mission, candidate, mission.cruise_rpm_bounds, config)[1],
+        mission.cruise_speed_mps,
+        config,
+    )
 
     effective_weight_n = max(weight_n, stage3_total_mass * mission.gravity_mps2)
     eta_blown = _safe_float(stage1_row.get("low_speed_blown_span_fraction"), 0.35)
     eta_blown = _clamp(eta_blown, 0.05, 0.95)
     s_blown = eta_blown * s_wing
     s_unblown = (1.0 - eta_blown) * s_wing
+    cruise_actual_veff = slipstream_velocity_after_prop(
+        mission,
+        candidate,
+        cruise_op["thrust_total_n"],
+        mission.cruise_speed_mps,
+    )
+    q_cruise_blown = 0.5 * mission.air_density_kgpm3 * cruise_actual_veff**2
+    q_cruise_effective = (q_cruise * s_unblown + q_cruise_blown * s_blown) / max(s_wing, 1e-9)
+    cruise_uniform_local_cl_required = effective_weight_n / max(
+        q_cruise * s_unblown + q_cruise_blown * s_blown,
+        1e-9,
+    )
     flap_down_clmax = _flap_down_clmax_values(wing_context, config)
     lift_remaining = max(
         effective_weight_n - q_low * s_unblown * flap_down_clmax["design_unblown_clmax"],
@@ -1034,44 +1544,141 @@ def _evaluate_tail_proxy(
     )
     q_blown_required = lift_remaining / max(s_blown * flap_down_clmax["design_blown_clmax"], 1e-9)
     required_veff = max(
-        mission.low_speed_mps,
+        slow_flight_speed,
         math.sqrt(max(2.0 * q_blown_required / mission.air_density_kgpm3, 0.0)),
     )
     thrust_req_veff = thrust_required_for_veff(
         mission,
         candidate,
         required_veff,
-        mission.low_speed_mps,
+        slow_flight_speed,
     )
 
+    slow_freestream_cl_required = effective_weight_n / max(q_low * s_wing, 1e-9)
     baseline_low_drag = _safe_float(stage1_row.get("low_speed_drag_n"), 8.0)
     low_fuselage_drag = q_low * config.fuselage_cd_area_m2
     low_htail_drag = q_low * geometry["htail_area_m2"] * 0.035
     low_vtail_drag = q_low * geometry["vtail_area_m2"] * 0.030
-    low_tail_drag = low_htail_drag + low_vtail_drag
-    low_natural_drag = baseline_low_drag + low_fuselage_drag + low_tail_drag
-    low_required_thrust = max(mission.thrust_margin_low_speed * low_natural_drag, thrust_req_veff)
+
+    def low_drag_model_for_thrust(thrust_n: float) -> dict[str, float]:
+        actual_veff_local = slipstream_velocity_after_prop(
+            mission,
+            candidate,
+            thrust_n,
+            slow_flight_speed,
+        )
+        q_blown_local = 0.5 * mission.air_density_kgpm3 * actual_veff_local**2
+        unblown_local_cl = min(
+            flap_down_clmax["design_unblown_clmax"],
+            effective_weight_n / max(q_low * s_unblown, 1e-9),
+        )
+        lift_from_unblown = q_low * s_unblown * unblown_local_cl
+        lift_remaining_local = max(effective_weight_n - lift_from_unblown, 0.0)
+        blown_local_cl = lift_remaining_local / max(q_blown_local * s_blown, 1e-9)
+        unblown_profile_drag = q_low * s_unblown * mission.cd0_flapped
+        blown_profile_drag = (
+            q_blown_local
+            * s_blown
+            * mission.cd0_flapped
+            * mission.blown_profile_drag_factor
+        )
+        unblown_induced_drag = q_low * s_unblown * (
+            unblown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        blown_induced_drag = q_blown_local * s_blown * (
+            blown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        local_induced_drag = unblown_induced_drag + blown_induced_drag
+        freestream_equiv_induced_drag = q_low * s_wing * (
+            slow_freestream_cl_required**2
+            / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        wing_profile_drag = unblown_profile_drag + blown_profile_drag
+        wing_induced_drag = local_induced_drag
+        natural_drag = (
+            wing_profile_drag
+            + wing_induced_drag
+            + low_htail_drag
+            + low_vtail_drag
+            + low_fuselage_drag
+        )
+        return {
+            "actual_veff": actual_veff_local,
+            "q_actual_blown": q_blown_local,
+            "slow_unblown_local_cl": unblown_local_cl,
+            "slow_blown_local_cl": blown_local_cl,
+            "low_wing_profile_drag": wing_profile_drag,
+            "low_wing_induced_drag": wing_induced_drag,
+            "low_wing_induced_local_drag": local_induced_drag,
+            "low_wing_induced_freestream_equiv_drag": freestream_equiv_induced_drag,
+            "low_unblown_induced_drag": unblown_induced_drag,
+            "low_blown_induced_drag": blown_induced_drag,
+            "low_natural_drag": natural_drag,
+        }
+
+    initial_low_natural_drag = baseline_low_drag + low_htail_drag + low_vtail_drag + low_fuselage_drag
+    low_required_thrust = max(mission.thrust_margin_low_speed * initial_low_natural_drag, thrust_req_veff)
     low_op = _solve_prop_power_for_thrust(
         mission,
         candidate,
-        mission.low_speed_mps,
+        slow_flight_speed,
         low_required_thrust,
         mission.low_speed_rpm_bounds,
         config,
     )
+    low_drag_model = low_drag_model_for_thrust(low_op["thrust_total_n"])
+    explicit_drag_thrust_required = max(
+        mission.thrust_margin_low_speed * low_drag_model["low_natural_drag"],
+        thrust_req_veff,
+    )
+    if explicit_drag_thrust_required > low_required_thrust + 1e-6:
+        low_required_thrust = explicit_drag_thrust_required
+        low_op = _solve_prop_power_for_thrust(
+            mission,
+            candidate,
+            slow_flight_speed,
+            low_required_thrust,
+            mission.low_speed_rpm_bounds,
+            config,
+        )
+        low_drag_model = low_drag_model_for_thrust(low_op["thrust_total_n"])
+    low_max_op = _stage3_prop_operating_point(
+        mission,
+        candidate,
+        _effective_rpm_bounds_for_prop_model(mission, candidate, mission.low_speed_rpm_bounds, config)[1],
+        slow_flight_speed,
+        config,
+    )
+
+    actual_veff = low_drag_model["actual_veff"]
+    q_actual_blown = low_drag_model["q_actual_blown"]
+    q_low_effective = (q_low * s_unblown + q_actual_blown * s_blown) / max(s_wing, 1e-9)
+    slow_flight_uniform_local_cl_required = effective_weight_n / max(
+        q_low * s_unblown + q_actual_blown * s_blown,
+        1e-9,
+    )
+    slow_unblown_local_cl = low_drag_model["slow_unblown_local_cl"]
+    slow_blown_local_cl = low_drag_model["slow_blown_local_cl"]
+    slow_local_cl_margin = flap_down_clmax["design_blown_clmax"] - slow_blown_local_cl
+    low_wing_profile_drag = low_drag_model["low_wing_profile_drag"]
+    low_wing_induced_drag = low_drag_model["low_wing_induced_drag"]
+    low_wing_induced_local_drag = low_drag_model["low_wing_induced_local_drag"]
+    low_wing_induced_freestream_equiv_drag = low_drag_model["low_wing_induced_freestream_equiv_drag"]
+    low_unblown_induced_drag = low_drag_model["low_unblown_induced_drag"]
+    low_blown_induced_drag = low_drag_model["low_blown_induced_drag"]
+    low_natural_drag = low_drag_model["low_natural_drag"]
     low_steady_drag = max(low_natural_drag, low_op["thrust_total_n"])
     low_added_drag_required = max(0.0, low_steady_drag - low_natural_drag)
     low_drag_delta_vs_cruise = low_steady_drag - cruise_drag
-    actual_veff = slipstream_velocity_after_prop(
-        mission,
-        candidate,
-        low_op["thrust_total_n"],
-        mission.low_speed_mps,
-    )
-    q_actual_blown = 0.5 * mission.air_density_kgpm3 * actual_veff**2
     slow_lift_available = (
         q_low * s_unblown * flap_down_clmax["unblown_clmax"]
         + q_actual_blown * s_blown * flap_down_clmax["blown_clmax"]
+    )
+    slow_flight_unblown_equivalent_clmax = flap_down_clmax["unblown_clmax"]
+    slow_flight_blown_equivalent_clmax = slow_lift_available / max(q_low * s_wing, 1e-9)
+    slow_flight_design_blown_equivalent_clmax = slow_flight_blown_equivalent_clmax / max(
+        config.slow_flight_stall_margin_factor,
+        1e-9,
     )
     slow_lift_target = config.slow_flight_stall_margin_factor * effective_weight_n
     slow_lift_margin_n = slow_lift_available - slow_lift_target
@@ -1081,6 +1688,11 @@ def _evaluate_tail_proxy(
         * effective_weight_n
         * config.slow_flight_stall_margin_factor
         / max(mission.air_density_kgpm3 * s_wing * flap_down_clmax["unblown_clmax"], 1e-9)
+    )
+    slow_flight_feasible = (
+        required_veff <= actual_veff + 1e-9
+        and slow_blown_local_cl <= flap_down_clmax["design_blown_clmax"] + 1e-9
+        and low_op["rpm_feasible"] >= 1.0
     )
 
     mass_budget_margin = mission.max_mass_kg - stage3_total_mass
@@ -1108,8 +1720,16 @@ def _evaluate_tail_proxy(
         add_lower_penalty(required_base_cg_fraction, config.baseline_cg_fraction_bounds_mac[0], 0.02, 18.0)
         add_upper_penalty(required_base_cg_fraction, config.baseline_cg_fraction_bounds_mac[1], 0.02, 18.0)
     add_lower_penalty(slow_lift_margin_fraction, config.min_slow_flight_lift_margin, 0.05, 18.0)
+    add_lower_penalty(actual_veff - required_veff, 0.0, 0.50, 80.0)
+    add_lower_penalty(slow_local_cl_margin, 0.0, 0.10, 80.0)
     add_upper_penalty(abs(tail_cl_cruise), 0.65, 0.10, 10.0)
     add_upper_penalty(abs(htail_incidence_deg), config.h_tail_incidence_bounds_deg[1], 1.0, 12.0)
+    add_upper_penalty(
+        abs(cruise_body_alpha_proxy_deg - config.target_cruise_body_alpha_deg),
+        0.50,
+        1.0,
+        2.0,
+    )
     add_lower_penalty(low_op["rpm_feasible"], 1.0, 1.0, 12.0)
     add_lower_penalty(cruise_op["rpm_feasible"], 1.0, 1.0, 12.0)
 
@@ -1155,7 +1775,8 @@ def _evaluate_tail_proxy(
         "vertical_tail_volume": v_volume,
         "htail_incidence_proxy_deg": htail_incidence_deg,
         "tail_cl_cruise_proxy": tail_cl_cruise,
-        "cruise_alpha_proxy_deg": alpha_wing,
+        "cruise_alpha_proxy_deg": cruise_body_alpha_proxy_deg,
+        "cruise_section_alpha_proxy_deg": alpha_wing_section,
         "cruise_drag_n": cruise_drag,
         "cruise_wing_profile_drag_n": cruise_wing_profile_drag,
         "cruise_wing_induced_drag_n": cruise_wing_induced_drag,
@@ -1163,31 +1784,83 @@ def _evaluate_tail_proxy(
         "cruise_vtail_drag_n": cruise_vtail_drag,
         "cruise_fuselage_drag_n": cruise_fuselage_drag,
         "cruise_power_w": cruise_op["power_electric_total_w"],
+        "cruise_propulsion_electric_power_without_aircraft_losses_w": cruise_op[
+            "propulsion_electric_power_without_aircraft_losses_w"
+        ],
+        "cruise_propulsion_wiring_loss_w": cruise_op["propulsion_wiring_loss_w"],
+        "cruise_avionics_power_loss_w": cruise_op["avionics_power_loss_w"],
+        "cruise_aircraft_power_losses_w": cruise_op["aircraft_power_losses_w"],
         "cruise_rpm": cruise_op["rpm"],
+        "cruise_thrust_required_n": cruise_op["thrust_required_n"],
+        "cruise_throttle_percent": _clamp(
+            100.0 * cruise_op["thrust_required_n"] / max(cruise_max_op["thrust_total_n"], 1e-9),
+            0.0,
+            100.0,
+        ),
         "cruise_ct": cruise_op["ct"],
         "cruise_cp": cruise_op["cp"],
+        "cruise_blown_effective_velocity_mps": cruise_actual_veff,
+        "cruise_unblown_dynamic_pressure_pa": q_cruise,
+        "cruise_blown_dynamic_pressure_pa": q_cruise_blown,
+        "cruise_effective_dynamic_pressure_pa": q_cruise_effective,
+        "cruise_blown_to_unblown_q_ratio": q_cruise_blown / max(q_cruise, 1e-9),
+        "cruise_uniform_local_cl_required": cruise_uniform_local_cl_required,
         "low_speed_drag_n": low_steady_drag,
         "low_speed_natural_drag_n": low_natural_drag,
         "low_speed_added_drag_required_n": low_added_drag_required,
         "low_speed_drag_delta_vs_cruise_n": low_drag_delta_vs_cruise,
         "low_speed_blown_lift_thrust_n": low_op["thrust_total_n"],
         "low_speed_stage1_baseline_drag_n": baseline_low_drag,
+        "low_speed_wing_profile_drag_n": low_wing_profile_drag,
+        "low_speed_wing_induced_drag_n": low_wing_induced_drag,
+        "low_speed_wing_induced_local_drag_n": low_wing_induced_local_drag,
+        "low_speed_wing_induced_freestream_equiv_drag_n": low_wing_induced_freestream_equiv_drag,
+        "low_speed_unblown_induced_drag_n": low_unblown_induced_drag,
+        "low_speed_blown_induced_drag_n": low_blown_induced_drag,
         "low_speed_htail_drag_n": low_htail_drag,
         "low_speed_vtail_drag_n": low_vtail_drag,
         "low_speed_fuselage_drag_n": low_fuselage_drag,
+        "slow_flight_freestream_cl_required": slow_freestream_cl_required,
+        "slow_flight_uniform_local_cl_required": slow_flight_uniform_local_cl_required,
+        "slow_flight_unblown_dynamic_pressure_pa": q_low,
+        "slow_flight_blown_dynamic_pressure_pa": q_actual_blown,
+        "slow_flight_effective_dynamic_pressure_pa": q_low_effective,
+        "slow_flight_blown_to_unblown_q_ratio": q_actual_blown / max(q_low, 1e-9),
+        "slow_flight_blown_area_m2": s_blown,
+        "slow_flight_unblown_area_m2": s_unblown,
+        "slow_flight_unblown_local_cl": slow_unblown_local_cl,
+        "slow_flight_blown_local_cl": slow_blown_local_cl,
+        "slow_flight_local_cl_margin": slow_local_cl_margin,
+        "slow_flight_feasible": 1.0 if slow_flight_feasible else 0.0,
+        "slow_flight_required_veff_margin_mps": actual_veff - required_veff,
         "low_speed_required_veff_mps": required_veff,
         "low_speed_actual_veff_mps": actual_veff,
         "slow_flight_unblown_clmax": flap_down_clmax["unblown_clmax"],
-        "slow_flight_blown_clmax": flap_down_clmax["blown_clmax"],
+        "slow_flight_blown_clmax": slow_flight_blown_equivalent_clmax,
+        "slow_flight_blown_local_clmax": flap_down_clmax["blown_clmax"],
+        "slow_flight_unblown_equivalent_clmax": slow_flight_unblown_equivalent_clmax,
+        "slow_flight_blown_equivalent_clmax": slow_flight_blown_equivalent_clmax,
         "slow_flight_design_unblown_clmax": flap_down_clmax["design_unblown_clmax"],
-        "slow_flight_design_blown_clmax": flap_down_clmax["design_blown_clmax"],
+        "slow_flight_design_blown_clmax": slow_flight_design_blown_equivalent_clmax,
+        "slow_flight_design_blown_local_clmax": flap_down_clmax["design_blown_clmax"],
         "slow_flight_lift_available_n": slow_lift_available,
         "slow_flight_lift_target_n": slow_lift_target,
         "slow_flight_lift_margin_n": slow_lift_margin_n,
         "slow_flight_lift_margin_percent": 100.0 * slow_lift_margin_fraction,
         "slow_flight_equiv_stall_speed_mps": equivalent_flap_down_stall_speed,
         "low_speed_power_w": low_op["power_electric_total_w"],
+        "low_speed_propulsion_electric_power_without_aircraft_losses_w": low_op[
+            "propulsion_electric_power_without_aircraft_losses_w"
+        ],
+        "low_speed_propulsion_wiring_loss_w": low_op["propulsion_wiring_loss_w"],
+        "low_speed_avionics_power_loss_w": low_op["avionics_power_loss_w"],
+        "low_speed_aircraft_power_losses_w": low_op["aircraft_power_losses_w"],
         "low_speed_rpm": low_op["rpm"],
+        "low_speed_throttle_percent": _clamp(
+            100.0 * low_op["thrust_required_n"] / max(low_max_op["thrust_total_n"], 1e-9),
+            0.0,
+            100.0,
+        ),
         "low_speed_ct": low_op["ct"],
         "low_speed_cp": low_op["cp"],
         "low_speed_thrust_required_n": low_required_thrust,
@@ -1207,6 +1880,8 @@ def _evaluate_tail_proxy(
         "static_margin_mac": static_margin,
         "stage1_total_built_mass_kg": stage1_total_mass,
         "stage3_total_built_mass_kg": stage3_total_mass,
+        "gross_flight_mass_kg": mission.gross_mass_kg,
+        "remaining_mass_to_gross_kg": mission.gross_mass_kg - stage3_total_mass,
         "mass_budget_margin_kg": mass_budget_margin,
         "htail_foam_mass_kg": h_volume_mass,
         "vtail_foam_mass_kg": v_volume_mass,
@@ -1214,10 +1889,21 @@ def _evaluate_tail_proxy(
         "blown_span_fraction": eta_blown,
         "clmax_source": flap_down_clmax["source"],
         "clmax_curve_source": flap_down_clmax["curve_source"],
+        "physical_clmax_source": flap_down_clmax["physical_clmax_source"],
+        "stage12_clean_section_clmax_unblown": flap_down_clmax["stage12_clean_section_clmax_unblown"],
+        "stage12_clean_section_clmax_blown": flap_down_clmax["stage12_clean_section_clmax_blown"],
+        "stage12_flapped_section_clmax_unblown": flap_down_clmax["stage12_flapped_section_clmax_unblown"],
+        "stage12_flapped_section_clmax_blown": flap_down_clmax["stage12_flapped_section_clmax_blown"],
+        "stage12_weighted_blown_physical_clmax": flap_down_clmax["stage12_weighted_blown_physical_clmax"],
         "no_flap_clmax": flap_down_clmax["no_flap_clmax"],
         "flap_only_clmax": flap_down_clmax["flap_only_clmax"],
         "clean_blowing_clmax": flap_down_clmax["clean_blowing_clmax"],
         "flap_down_blown_clmax": flap_down_clmax["flap_down_blown_clmax"],
+        "raw_no_flap_clmax": flap_down_clmax["raw_no_flap_clmax"],
+        "raw_flap_only_clmax": flap_down_clmax["raw_flap_only_clmax"],
+        "raw_clean_blowing_clmax": flap_down_clmax["raw_clean_blowing_clmax"],
+        "raw_flap_down_blown_clmax": flap_down_clmax["raw_flap_down_blown_clmax"],
+        "clmax_was_capped": flap_down_clmax["clmax_was_capped"],
         "no_flap_clmax_alpha_deg": flap_down_clmax["no_flap_clmax_alpha_deg"],
         "flap_only_clmax_alpha_deg": flap_down_clmax["flap_only_clmax_alpha_deg"],
         "clean_blowing_clmax_alpha_deg": flap_down_clmax["clean_blowing_clmax_alpha_deg"],
@@ -1388,6 +2074,10 @@ def build_airplane_geometry(
 
     main_airfoil = asb.Airfoil(wing_context["selected_airfoil"])
     tail_airfoil = asb.Airfoil(config.tail_airfoil)
+    main_wing_incidence_deg = _safe_float(
+        geometry.get("main_wing_incidence_deg"),
+        config.main_wing_incidence_deg,
+    )
     semispan = mission.semispan_m
     chord = mission.chord_m
     flap_end_y = semispan * wing_context["flap_span_fraction"]
@@ -1400,7 +2090,7 @@ def build_airplane_geometry(
             asb.WingXSec(
                 xyz_le=[0.0, 0.0, 0.0],
                 chord=chord,
-                twist=config.main_wing_incidence_deg,
+                twist=main_wing_incidence_deg,
                 airfoil=main_airfoil,
                 control_surfaces=[
                     asb.ControlSurface(
@@ -1414,7 +2104,7 @@ def build_airplane_geometry(
             asb.WingXSec(
                 xyz_le=[0.0, flap_end_y, 0.0],
                 chord=chord,
-                twist=config.main_wing_incidence_deg,
+                twist=main_wing_incidence_deg,
                 airfoil=main_airfoil,
                 control_surfaces=[
                     asb.ControlSurface(
@@ -1428,7 +2118,7 @@ def build_airplane_geometry(
             asb.WingXSec(
                 xyz_le=[0.0, aileron_start_y, 0.0],
                 chord=chord,
-                twist=config.main_wing_incidence_deg,
+                twist=main_wing_incidence_deg,
                 airfoil=main_airfoil,
                 control_surfaces=[
                     asb.ControlSurface(
@@ -1442,7 +2132,7 @@ def build_airplane_geometry(
             asb.WingXSec(
                 xyz_le=[0.0, semispan, 0.0],
                 chord=chord,
-                twist=config.main_wing_incidence_deg + config.main_wing_washout_deg,
+                twist=main_wing_incidence_deg + config.main_wing_washout_deg,
                 airfoil=main_airfoil,
                 control_surfaces=[
                     asb.ControlSurface(
@@ -1679,7 +2369,7 @@ def evaluate_section_polars(
     )
     low_reynolds = (
         mission.air_density_kgpm3
-        * mission.low_speed_mps
+        * _stage3_slow_flight_speed_mps(config)
         * mission.chord_m
         / max(mission.dynamic_viscosity_pas, 1e-12)
     )
@@ -1696,10 +2386,15 @@ def evaluate_section_polars(
             )
         ],
     )
+    stage12_clean = _workflow_curve_polar(wing_context, "clean")
+    stage12_flaps_down = _workflow_curve_polar(wing_context, "flaps_down")
     return {
         "alphas_deg": alphas,
         "clean": clean,
         "flapped": flapped,
+        "stage12_clean": stage12_clean,
+        "stage12_flaps_down": stage12_flaps_down,
+        "stage12_high_lift_polar_source": wing_context.get("clmax_curve_source", ""),
         "reynolds_cruise": float(reynolds),
         "reynolds_low": float(low_reynolds),
         "clean_section_clmax": float(onp.asarray(clean["CL"], dtype=float).max()),
@@ -1889,6 +2584,9 @@ def render_polar_plot(
     fig, axs = plt.subplots(1, 2, figsize=(12, 4.4))
     axs[0].plot(polars["alphas_deg"], onp.asarray(polars["clean"]["CL"], dtype=float), label="Clean cruise Re")
     axs[0].plot(polars["alphas_deg"], onp.asarray(polars["flapped"]["CL"], dtype=float), label="Flapped low Re")
+    if polars.get("stage12_flaps_down") is not None:
+        stage12 = polars["stage12_flaps_down"]
+        axs[0].plot(stage12["alpha_deg"], stage12["CL"], linestyle="--", linewidth=2.0, label="Stage 1/2 all high-lift")
     axs[0].axvline(cruise_alpha_deg, color="#6b7280", linestyle="--", linewidth=1.0)
     axs[0].set_xlabel("Alpha [deg]")
     axs[0].set_ylabel("Section CL")
@@ -1898,6 +2596,9 @@ def render_polar_plot(
 
     axs[1].plot(polars["alphas_deg"], onp.asarray(polars["clean"]["CD"], dtype=float), label="Clean cruise Re")
     axs[1].plot(polars["alphas_deg"], onp.asarray(polars["flapped"]["CD"], dtype=float), label="Flapped low Re")
+    if polars.get("stage12_flaps_down") is not None:
+        stage12 = polars["stage12_flaps_down"]
+        axs[1].plot(stage12["alpha_deg"], stage12["CD"], linestyle="--", linewidth=2.0, label="Stage 1/2 all high-lift")
     axs[1].set_xlabel("Alpha [deg]")
     axs[1].set_ylabel("Section CD")
     axs[1].set_title("Main Airfoil Drag")
@@ -1911,6 +2612,8 @@ def render_polar_plot(
 
 
 def _section_polar_from_stage3_polars(polars: dict[str, Any], mode: str) -> dict[str, Any]:
+    if mode == "flaps_down" and polars.get("stage12_flaps_down") is not None:
+        return polars["stage12_flaps_down"]
     data = polars["flapped"] if mode == "flaps_down" else polars["clean"]
     return {
         "alpha_deg": polars["alphas_deg"],
@@ -1997,6 +2700,33 @@ def _power_for_drag(
     }
 
 
+def _propwash_dynamic_pressure_summary(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    geometry: dict[str, Any],
+    thrust_total_n: float,
+    freestream_mps: float,
+) -> dict[str, float]:
+    """Pressure-weight the propwash and freestream sections for a flight condition."""
+
+    q_unblown = 0.5 * mission.air_density_kgpm3 * freestream_mps**2
+    blown_velocity = slipstream_velocity_after_prop(
+        mission,
+        candidate,
+        max(thrust_total_n, 0.0),
+        freestream_mps,
+    )
+    q_blown = 0.5 * mission.air_density_kgpm3 * blown_velocity**2
+    blown_fraction = _clamp(_safe_float(geometry.get("blown_span_fraction"), 0.0), 0.0, 1.0)
+    q_effective = (1.0 - blown_fraction) * q_unblown + blown_fraction * q_blown
+    return {
+        "blown_effective_velocity_mps": blown_velocity,
+        "unblown_dynamic_pressure_pa": q_unblown,
+        "blown_dynamic_pressure_pa": q_blown,
+        "effective_dynamic_pressure_pa": q_effective,
+    }
+
+
 def _append_power_to_breakdown(
     mission: Stage1MissionConfig,
     candidate: Stage1Candidate,
@@ -2015,6 +2745,173 @@ def _append_power_to_breakdown(
     return {**breakdown, **power}
 
 
+def _power_plot_value(op: dict[str, float]) -> float:
+    """Avoid plotting saturated max-RPM power as if an infeasible point were solved."""
+
+    if _safe_float(op.get("rpm_feasible"), 1.0) < 0.5:
+        return float("nan")
+    return _safe_float(op.get("power_w"), float("nan"))
+
+
+def _flaps_down_split_sweep_condition(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    geometry: dict[str, Any],
+    config: Stage3SizingConfig,
+    flapped_polar: dict[str, Any],
+    *,
+    velocity_mps: float,
+    mass_kg: float,
+    alpha_deg: float | None = None,
+) -> dict[str, float]:
+    """Stage 3 flaps-down sweep using split blown/unblown wing drag.
+
+    Stage 1/2's all-high-lift CL/CD curve is an equivalent whole-wing curve
+    referenced to freestream dynamic pressure. It is excellent traceability for
+    lift capacity, but it is not a physical profile-drag polar. For the Stage 3
+    drag/power plots, compute drag from the actual unblown panel, blown panel,
+    tail, and fuselage components instead.
+    """
+
+    speed = max(float(velocity_mps), 1e-6)
+    weight_n = mass_kg * mission.gravity_mps2
+    q_unblown = 0.5 * mission.air_density_kgpm3 * speed**2
+    s_wing = mission.wing_area_m2
+    aspect_ratio = mission.aspect_ratio
+    blown_fraction = _clamp(_safe_float(geometry.get("blown_span_fraction"), 0.35), 0.05, 0.95)
+    s_blown = blown_fraction * s_wing
+    s_unblown = (1.0 - blown_fraction) * s_wing
+    design_unblown_clmax = _safe_float(geometry.get("slow_flight_design_unblown_clmax"), 1.0)
+    design_blown_clmax = _safe_float(geometry.get("slow_flight_design_blown_local_clmax"), 1.0)
+
+    if alpha_deg is None:
+        unblown_local_cl = min(
+            design_unblown_clmax,
+            weight_n / max(q_unblown * s_unblown, 1e-9),
+        )
+        blown_local_cl_for_lift = design_blown_clmax
+        alpha_for_report = _alpha_for_cl(flapped_polar, blown_local_cl_for_lift)
+        cd_profile = mission.cd0_flapped
+    else:
+        alpha_for_report = float(alpha_deg)
+        local_cl = _interp_polar(flapped_polar, "CL", alpha_for_report)
+        if local_cl <= 1e-9:
+            nan = float("nan")
+            return {
+                "velocity_mps": speed,
+                "alpha_deg": alpha_for_report,
+                "cl": local_cl,
+                "cl_required": weight_n / max(q_unblown * s_wing, 1e-9),
+                "cm": _interp_polar(flapped_polar, "CM", alpha_for_report),
+                "tail_cl": nan,
+                "wing_profile_drag_n": nan,
+                "wing_induced_drag_n": nan,
+                "htail_drag_n": nan,
+                "vtail_drag_n": nan,
+                "fuselage_drag_n": nan,
+                "total_drag_n": nan,
+                "power_w": nan,
+                "rpm": nan,
+                "thrust_required_n": nan,
+                "thrust_available_n": nan,
+                "rpm_feasible": 0.0,
+                "trim_feasible": 0.0,
+                "added_drag_required_n": nan,
+                "blown_effective_velocity_mps": nan,
+            }
+        unblown_local_cl = min(local_cl, design_unblown_clmax)
+        blown_local_cl_for_lift = min(local_cl, design_blown_clmax)
+        cd_profile = mission.cd0_flapped
+
+    lift_from_unblown = q_unblown * s_unblown * unblown_local_cl
+    lift_remaining = max(weight_n - lift_from_unblown, 0.0)
+    q_blown_required = lift_remaining / max(s_blown * blown_local_cl_for_lift, 1e-9)
+    required_veff = max(speed, math.sqrt(max(2.0 * q_blown_required / mission.air_density_kgpm3, 0.0)))
+    thrust_req_veff = thrust_required_for_veff(mission, candidate, required_veff, speed)
+
+    def drag_for_thrust(thrust_n: float) -> dict[str, float]:
+        blown_velocity = slipstream_velocity_after_prop(mission, candidate, max(thrust_n, 0.0), speed)
+        q_blown = 0.5 * mission.air_density_kgpm3 * blown_velocity**2
+        blown_local_cl = lift_remaining / max(q_blown * s_blown, 1e-9)
+        wing_profile_drag = (
+            q_unblown * s_unblown * cd_profile
+            + q_blown * s_blown * cd_profile * mission.blown_profile_drag_factor
+        )
+        unblown_induced_drag = q_unblown * s_unblown * (
+            unblown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        blown_induced_drag = q_blown * s_blown * (
+            blown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        htail_drag = q_unblown * geometry["htail_area_m2"] * 0.035
+        vtail_drag = q_unblown * geometry["vtail_area_m2"] * 0.030
+        fuselage_drag = q_unblown * config.fuselage_cd_area_m2
+        natural_drag = (
+            wing_profile_drag
+            + unblown_induced_drag
+            + blown_induced_drag
+            + htail_drag
+            + vtail_drag
+            + fuselage_drag
+        )
+        return {
+            "blown_velocity": blown_velocity,
+            "q_blown": q_blown,
+            "blown_local_cl": blown_local_cl,
+            "wing_profile_drag_n": wing_profile_drag,
+            "wing_induced_drag_n": unblown_induced_drag + blown_induced_drag,
+            "htail_drag_n": htail_drag,
+            "vtail_drag_n": vtail_drag,
+            "fuselage_drag_n": fuselage_drag,
+            "natural_drag_n": natural_drag,
+        }
+
+    preliminary_drag = drag_for_thrust(thrust_req_veff)
+    thrust_required = max(thrust_req_veff, mission.thrust_margin_low_speed * preliminary_drag["natural_drag_n"])
+    if alpha_deg is None and abs(speed - _stage3_slow_flight_speed_mps(config)) <= 1e-9:
+        thrust_required = max(
+            thrust_required,
+            _safe_float(geometry.get("low_speed_thrust_required_n"), thrust_required),
+        )
+    op = _solve_prop_power_for_thrust(mission, candidate, speed, thrust_required, mission.low_speed_rpm_bounds, config)
+    drag = drag_for_thrust(op["thrust_total_n"])
+    explicit_required = max(thrust_req_veff, mission.thrust_margin_low_speed * drag["natural_drag_n"])
+    if explicit_required > thrust_required + 1e-6:
+        thrust_required = explicit_required
+        op = _solve_prop_power_for_thrust(mission, candidate, speed, thrust_required, mission.low_speed_rpm_bounds, config)
+        drag = drag_for_thrust(op["thrust_total_n"])
+
+    q_effective = (q_unblown * s_unblown + drag["q_blown"] * s_blown) / max(s_wing, 1e-9)
+    uniform_local_cl = weight_n / max(q_effective * s_wing, 1e-9)
+    cm = _interp_polar(flapped_polar, "CM", alpha_for_report)
+    power = {
+        "power_w": op["power_electric_total_w"],
+        "rpm": op["rpm"],
+        "thrust_required_n": op["thrust_required_n"],
+        "thrust_available_n": op["thrust_total_n"],
+        "rpm_feasible": op["rpm_feasible"],
+    }
+    return {
+        "velocity_mps": speed,
+        "alpha_deg": alpha_for_report,
+        "cl": uniform_local_cl,
+        "cl_required": weight_n / max(q_unblown * s_wing, 1e-9),
+        "cm": cm,
+        "tail_cl": float("nan"),
+        "wing_profile_drag_n": drag["wing_profile_drag_n"],
+        "wing_induced_drag_n": drag["wing_induced_drag_n"],
+        "htail_drag_n": drag["htail_drag_n"],
+        "vtail_drag_n": drag["vtail_drag_n"],
+        "fuselage_drag_n": drag["fuselage_drag_n"],
+        "total_drag_n": drag["natural_drag_n"],
+        **power,
+        "power_w": _power_plot_value(power),
+        "trim_feasible": 1.0 if op["rpm_feasible"] >= 0.5 else 0.0,
+        "added_drag_required_n": max(0.0, op["thrust_total_n"] - drag["natural_drag_n"]),
+        "blown_effective_velocity_mps": drag["blown_velocity"],
+    }
+
+
 def calculate_approach_trim(
     mission: Stage1MissionConfig,
     geometry: dict[str, Any],
@@ -2023,11 +2920,19 @@ def calculate_approach_trim(
     candidate: Stage1Candidate,
     flapped_polar: dict[str, Any],
 ) -> dict[str, float]:
-    """Estimate steady flaps-down approach trim at the user-specified descent angle."""
+    """Estimate steady flaps-down approach trim at the user-specified descent rate."""
 
     approach_speed = max(config.approach_speed_mps, 1e-6)
-    gamma_deg = max(config.approach_target_angle_deg, 0.0)
-    gamma_rad = math.radians(gamma_deg)
+    max_descent_rate_mps = max(config.max_descent_rate_fps, 0.0) * 0.3048
+    target_sink_rate_mps = max(config.approach_target_sink_rate_fps, 0.0) * 0.3048
+    if target_sink_rate_mps <= 1e-9:
+        requested_gamma_deg = max(config.approach_target_angle_deg, 0.0)
+        requested_gamma_rad = math.radians(requested_gamma_deg)
+        target_sink_rate_mps = approach_speed * math.sin(requested_gamma_rad)
+    requested_sink_rate_mps = min(target_sink_rate_mps, max_descent_rate_mps)
+    sink_rate_mps = min(requested_sink_rate_mps, max_descent_rate_mps, 0.999 * approach_speed)
+    gamma_rad = math.asin(_clamp(sink_rate_mps / approach_speed, 0.0, 0.999))
+    gamma_deg = math.degrees(gamma_rad)
     q = 0.5 * mission.air_density_kgpm3 * approach_speed**2
     lift_required = mission.gross_weight_n * math.cos(gamma_rad)
     cl_required = lift_required / max(q * mission.wing_area_m2, 1e-9)
@@ -2054,11 +2959,19 @@ def calculate_approach_trim(
     max_op = _stage3_prop_operating_point(
         mission,
         candidate,
-        mission.low_speed_rpm_bounds[1],
+        _effective_rpm_bounds_for_prop_model(mission, candidate, mission.low_speed_rpm_bounds, config)[1],
         approach_speed,
         config,
     )
     throttle_percent = 100.0 * thrust_required / max(max_op["thrust_total_n"], 1e-9)
+    propwash = _propwash_dynamic_pressure_summary(
+        mission,
+        candidate,
+        geometry,
+        op["thrust_total_n"],
+        approach_speed,
+    )
+    local_cl_required = lift_required / max(propwash["effective_dynamic_pressure_pa"] * mission.wing_area_m2, 1e-9)
 
     h_lift_slope = _finite_wing_lift_slope_per_rad(geometry["htail_aspect_ratio"])
     elevator_tau = _control_surface_tau(
@@ -2091,16 +3004,23 @@ def calculate_approach_trim(
 
     return {
         "approach_target_angle_deg": gamma_deg,
+        "approach_target_sink_rate_fps": config.approach_target_sink_rate_fps,
+        "approach_target_sink_rate_mps": target_sink_rate_mps,
         "approach_speed_mps": approach_speed,
         "approach_alpha_deg": alpha_deg,
         "approach_cl_required": cl_required,
+        "approach_uniform_local_cl_required": local_cl_required,
         "approach_lift_required_n": lift_required,
         "approach_drag_n": drag_n,
         "approach_thrust_required_n": thrust_required,
         "approach_power_w": op["power_electric_total_w"],
         "approach_rpm": op["rpm"],
         "approach_throttle_percent": _clamp(throttle_percent, 0.0, 100.0),
-        "approach_sink_rate_mps": approach_speed * math.sin(gamma_rad),
+        "approach_max_descent_rate_fps": config.max_descent_rate_fps,
+        "approach_descent_rate_limited": 1.0 if sink_rate_mps < requested_sink_rate_mps - 1e-9 else 0.0,
+        "approach_sink_rate_target_met": 1.0 if abs(sink_rate_mps - requested_sink_rate_mps) <= 1e-6 else 0.0,
+        "approach_sink_rate_mps": sink_rate_mps,
+        "approach_sink_rate_fps": sink_rate_mps / 0.3048,
         "approach_glide_ratio": 1.0 / max(math.tan(gamma_rad), 1e-9),
         "approach_elevator_trim_deg": elevator_trim_deg,
         "approach_rudder_trim_deg": 0.0,
@@ -2111,6 +3031,347 @@ def calculate_approach_trim(
         "approach_vtail_drag_n": breakdown["vtail_drag_n"],
         "approach_fuselage_drag_n": breakdown["fuselage_drag_n"],
         "approach_rpm_feasible": op["rpm_feasible"],
+        "approach_blown_effective_velocity_mps": propwash["blown_effective_velocity_mps"],
+        "approach_unblown_dynamic_pressure_pa": propwash["unblown_dynamic_pressure_pa"],
+        "approach_blown_dynamic_pressure_pa": propwash["blown_dynamic_pressure_pa"],
+        "approach_effective_dynamic_pressure_pa": propwash["effective_dynamic_pressure_pa"],
+    }
+
+
+def calculate_climb_trim(
+    mission: Stage1MissionConfig,
+    geometry: dict[str, Any],
+    config: Stage3SizingConfig,
+    candidate: Stage1Candidate,
+    clean_polar: dict[str, Any],
+) -> dict[str, float]:
+    """Estimate max-rate climb trim using the configured vertical-rate cap."""
+
+    climb_speed = max(config.climb_trim_speed_mps, 1e-6)
+    target_rate_mps = max(config.max_climb_rate_fps, 0.0) * 0.3048
+    climb_rate_mps = min(target_rate_mps, 0.999 * climb_speed)
+    gamma_rad = math.asin(_clamp(climb_rate_mps / climb_speed, 0.0, 0.999))
+    q = 0.5 * mission.air_density_kgpm3 * climb_speed**2
+    lift_required = mission.gross_weight_n * math.cos(gamma_rad)
+    cl_required = lift_required / max(q * mission.wing_area_m2, 1e-9)
+    alpha_deg = _alpha_for_cl(clean_polar, cl_required)
+    breakdown = _drag_breakdown_for_condition(
+        mission,
+        geometry,
+        config,
+        clean_polar,
+        velocity_mps=climb_speed,
+        alpha_deg=alpha_deg,
+        mode="clean",
+    )
+    thrust_required = breakdown["total_drag_n"] + mission.gross_weight_n * math.sin(gamma_rad)
+    op = _solve_prop_power_for_thrust(
+        mission,
+        candidate,
+        climb_speed,
+        thrust_required,
+        mission.low_speed_rpm_bounds,
+        config,
+    )
+    max_op = _stage3_prop_operating_point(
+        mission,
+        candidate,
+        _effective_rpm_bounds_for_prop_model(mission, candidate, mission.low_speed_rpm_bounds, config)[1],
+        climb_speed,
+        config,
+    )
+    throttle_percent = 100.0 * thrust_required / max(max_op["thrust_total_n"], 1e-9)
+    propwash = _propwash_dynamic_pressure_summary(
+        mission,
+        candidate,
+        geometry,
+        op["thrust_total_n"],
+        climb_speed,
+    )
+    local_cl_required = lift_required / max(propwash["effective_dynamic_pressure_pa"] * mission.wing_area_m2, 1e-9)
+
+    h_lift_slope = _finite_wing_lift_slope_per_rad(geometry["htail_aspect_ratio"])
+    elevator_tau = _control_surface_tau(
+        _safe_float(geometry.get("elevator_chord_fraction_sized"), config.elevator_chord_fraction),
+        config.elevator_chord_fraction,
+        config.control_surface_effectiveness_exponent,
+    )
+    cm_to_trim = -(
+        breakdown["cm"]
+        + breakdown["cl"]
+        * (
+            geometry["cg_x_m"] / max(mission.chord_m, 1e-9)
+            - config.wing_aerodynamic_center_fraction_mac
+        )
+    )
+    cm_per_deg = (
+        config.tail_dynamic_pressure_ratio
+        * h_lift_slope
+        * geometry["horizontal_tail_volume"]
+        * elevator_tau
+        * max(config.approach_tail_trim_effectiveness, 1e-9)
+        * math.pi
+        / 180.0
+    )
+    elevator_trim_deg = _clamp(
+        cm_to_trim / max(cm_per_deg, 1e-9),
+        -config.approach_max_elevator_trim_deg,
+        config.approach_max_elevator_trim_deg,
+    )
+
+    return {
+        "climb_target_rate_fps": config.max_climb_rate_fps,
+        "climb_target_rate_mps": climb_rate_mps,
+        "climb_angle_deg": math.degrees(gamma_rad),
+        "climb_speed_mps": climb_speed,
+        "climb_cl_required": cl_required,
+        "climb_uniform_local_cl_required": local_cl_required,
+        "climb_drag_n": breakdown["total_drag_n"],
+        "climb_thrust_required_n": thrust_required,
+        "climb_power_w": op["power_electric_total_w"],
+        "climb_rpm": op["rpm"],
+        "climb_throttle_percent": _clamp(throttle_percent, 0.0, 100.0),
+        "climb_elevator_trim_deg": elevator_trim_deg,
+        "climb_rpm_feasible": op["rpm_feasible"],
+        "climb_blown_effective_velocity_mps": propwash["blown_effective_velocity_mps"],
+        "climb_unblown_dynamic_pressure_pa": propwash["unblown_dynamic_pressure_pa"],
+        "climb_blown_dynamic_pressure_pa": propwash["blown_dynamic_pressure_pa"],
+        "climb_effective_dynamic_pressure_pa": propwash["effective_dynamic_pressure_pa"],
+    }
+
+
+def _max_operating_thrust(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    velocity_mps: float,
+    rpm_bounds: tuple[int, int],
+    config: Stage3SizingConfig,
+) -> float:
+    return _stage3_prop_operating_point(
+        mission,
+        candidate,
+        _effective_rpm_bounds_for_prop_model(mission, candidate, rpm_bounds, config)[1],
+        velocity_mps,
+        config,
+    )["thrust_total_n"]
+
+
+def _mass_case_cruise_performance(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    geometry: dict[str, Any],
+    config: Stage3SizingConfig,
+    clean_polar: dict[str, Any],
+    mass_kg: float,
+) -> dict[str, float]:
+    case_mission = replace(mission, gross_mass_kg=mass_kg)
+    q = 0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2
+    weight_n = case_mission.gross_weight_n
+    cl_required = weight_n / max(q * mission.wing_area_m2, 1e-9)
+    alpha_deg = _alpha_for_cl(clean_polar, cl_required)
+    breakdown = _drag_breakdown_for_condition(
+        case_mission,
+        geometry,
+        config,
+        clean_polar,
+        velocity_mps=mission.cruise_speed_mps,
+        alpha_deg=alpha_deg,
+        mode="clean",
+    )
+    thrust_required = mission.thrust_margin_cruise * breakdown["total_drag_n"]
+    op = _solve_prop_power_for_thrust(
+        mission,
+        candidate,
+        mission.cruise_speed_mps,
+        thrust_required,
+        mission.cruise_rpm_bounds,
+        config,
+    )
+    propwash = _propwash_dynamic_pressure_summary(
+        mission,
+        candidate,
+        geometry,
+        op["thrust_total_n"],
+        mission.cruise_speed_mps,
+    )
+    local_cl_required = weight_n / max(propwash["effective_dynamic_pressure_pa"] * mission.wing_area_m2, 1e-9)
+    max_thrust = _max_operating_thrust(mission, candidate, mission.cruise_speed_mps, mission.cruise_rpm_bounds, config)
+    return {
+        "mass_kg": mass_kg,
+        "speed_mps": mission.cruise_speed_mps,
+        "cl_required": cl_required,
+        "uniform_local_cl_required": local_cl_required,
+        "drag_n": breakdown["total_drag_n"],
+        "thrust_required_n": thrust_required,
+        "throttle_percent": _clamp(100.0 * thrust_required / max(max_thrust, 1e-9), 0.0, 100.0),
+        "rpm": op["rpm"],
+        "power_w": op["power_electric_total_w"],
+        "blown_effective_velocity_mps": propwash["blown_effective_velocity_mps"],
+        "effective_dynamic_pressure_pa": propwash["effective_dynamic_pressure_pa"],
+        "rpm_feasible": op["rpm_feasible"],
+    }
+
+
+def _mass_case_slow_performance(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    geometry: dict[str, Any],
+    config: Stage3SizingConfig,
+    mass_kg: float,
+) -> dict[str, float]:
+    speed = _stage3_slow_flight_speed_mps(config)
+    weight_n = mass_kg * mission.gravity_mps2
+    q_low = 0.5 * mission.air_density_kgpm3 * speed**2
+    s_wing = mission.wing_area_m2
+    aspect_ratio = mission.aspect_ratio
+    eta_blown = _clamp(_safe_float(geometry.get("blown_span_fraction"), 0.35), 0.05, 0.95)
+    s_blown = eta_blown * s_wing
+    s_unblown = (1.0 - eta_blown) * s_wing
+    design_unblown_clmax = _safe_float(geometry.get("slow_flight_design_unblown_clmax"), 1.0)
+    design_blown_local_clmax = _safe_float(geometry.get("slow_flight_design_blown_local_clmax"), 1.0)
+    lift_remaining = max(weight_n - q_low * s_unblown * design_unblown_clmax, 0.0)
+    q_blown_required = lift_remaining / max(s_blown * design_blown_local_clmax, 1e-9)
+    required_veff = max(speed, math.sqrt(max(2.0 * q_blown_required / mission.air_density_kgpm3, 0.0)))
+    thrust_req_veff = thrust_required_for_veff(mission, candidate, required_veff, speed)
+
+    low_htail_drag = q_low * geometry["htail_area_m2"] * 0.035
+    low_vtail_drag = q_low * geometry["vtail_area_m2"] * 0.030
+    low_fuselage_drag = q_low * config.fuselage_cd_area_m2
+    freestream_cl_required = weight_n / max(q_low * s_wing, 1e-9)
+
+    def drag_for_thrust(thrust_n: float) -> dict[str, float]:
+        actual_veff = slipstream_velocity_after_prop(mission, candidate, thrust_n, speed)
+        q_blown = 0.5 * mission.air_density_kgpm3 * actual_veff**2
+        unblown_local_cl = min(design_unblown_clmax, weight_n / max(q_low * s_unblown, 1e-9))
+        lift_from_unblown = q_low * s_unblown * unblown_local_cl
+        blown_local_cl = max(weight_n - lift_from_unblown, 0.0) / max(q_blown * s_blown, 1e-9)
+        wing_profile_drag = (
+            q_low * s_unblown * mission.cd0_flapped
+            + q_blown * s_blown * mission.cd0_flapped * mission.blown_profile_drag_factor
+        )
+        unblown_induced_drag = q_low * s_unblown * (
+            unblown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        blown_induced_drag = q_blown * s_blown * (
+            blown_local_cl**2 / max(math.pi * mission.oswald_e * aspect_ratio, 1e-9)
+        )
+        natural_drag = (
+            wing_profile_drag
+            + unblown_induced_drag
+            + blown_induced_drag
+            + low_htail_drag
+            + low_vtail_drag
+            + low_fuselage_drag
+        )
+        return {
+            "actual_veff": actual_veff,
+            "q_blown": q_blown,
+            "unblown_local_cl": unblown_local_cl,
+            "blown_local_cl": blown_local_cl,
+            "wing_profile_drag_n": wing_profile_drag,
+            "wing_induced_drag_n": unblown_induced_drag + blown_induced_drag,
+            "natural_drag_n": natural_drag,
+        }
+
+    thrust_required = max(
+        thrust_req_veff,
+        mission.thrust_margin_low_speed * _safe_float(geometry.get("low_speed_natural_drag_n"), 0.0) * mass_kg / max(mission.gross_mass_kg, 1e-9),
+    )
+    op = _solve_prop_power_for_thrust(mission, candidate, speed, thrust_required, mission.low_speed_rpm_bounds, config)
+    drag_model = drag_for_thrust(op["thrust_total_n"])
+    explicit_required = max(thrust_req_veff, mission.thrust_margin_low_speed * drag_model["natural_drag_n"])
+    if explicit_required > thrust_required + 1e-6:
+        thrust_required = explicit_required
+        op = _solve_prop_power_for_thrust(mission, candidate, speed, thrust_required, mission.low_speed_rpm_bounds, config)
+        drag_model = drag_for_thrust(op["thrust_total_n"])
+
+    q_effective = (q_low * s_unblown + drag_model["q_blown"] * s_blown) / max(s_wing, 1e-9)
+    local_cl_required = weight_n / max(q_effective * s_wing, 1e-9)
+    steady_drag = max(drag_model["natural_drag_n"], op["thrust_total_n"])
+    max_thrust = _max_operating_thrust(mission, candidate, speed, mission.low_speed_rpm_bounds, config)
+    return {
+        "mass_kg": mass_kg,
+        "speed_mps": speed,
+        "cl_required": freestream_cl_required,
+        "uniform_local_cl_required": local_cl_required,
+        "drag_n": steady_drag,
+        "natural_drag_n": drag_model["natural_drag_n"],
+        "thrust_required_n": op["thrust_required_n"],
+        "throttle_percent": _clamp(100.0 * op["thrust_required_n"] / max(max_thrust, 1e-9), 0.0, 100.0),
+        "rpm": op["rpm"],
+        "power_w": op["power_electric_total_w"],
+        "blown_effective_velocity_mps": drag_model["actual_veff"],
+        "effective_dynamic_pressure_pa": q_effective,
+        "unblown_local_cl": drag_model["unblown_local_cl"],
+        "blown_local_cl": drag_model["blown_local_cl"],
+        "local_cl_margin": design_blown_local_clmax - drag_model["blown_local_cl"],
+        "added_drag_required_n": max(0.0, steady_drag - drag_model["natural_drag_n"]),
+        "rpm_feasible": op["rpm_feasible"],
+    }
+
+
+def _mass_case_condition_summary(
+    mission: Stage1MissionConfig,
+    candidate: Stage1Candidate,
+    geometry: dict[str, Any],
+    config: Stage3SizingConfig,
+    clean_polar: dict[str, Any],
+    flapped_polar: dict[str, Any],
+    mass_kg: float,
+) -> dict[str, float]:
+    case_mission = replace(mission, gross_mass_kg=mass_kg)
+    cruise = _mass_case_cruise_performance(mission, candidate, geometry, config, clean_polar, mass_kg)
+    slow = _mass_case_slow_performance(mission, candidate, geometry, config, mass_kg)
+    approach = calculate_approach_trim(case_mission, geometry, {}, config, candidate, flapped_polar)
+    climb = calculate_climb_trim(case_mission, geometry, config, candidate, clean_polar)
+
+    return {
+        "mass_kg": mass_kg,
+        "cruise_cl_required": cruise["cl_required"],
+        "cruise_uniform_local_cl_required": cruise["uniform_local_cl_required"],
+        "cruise_drag_n": cruise["drag_n"],
+        "cruise_thrust_required_n": cruise["thrust_required_n"],
+        "cruise_throttle_percent": cruise["throttle_percent"],
+        "cruise_rpm": cruise["rpm"],
+        "cruise_power_w": cruise["power_w"],
+        "cruise_blown_effective_velocity_mps": cruise["blown_effective_velocity_mps"],
+        "cruise_effective_dynamic_pressure_pa": cruise["effective_dynamic_pressure_pa"],
+        "slow_cl_required": slow["cl_required"],
+        "slow_uniform_local_cl_required": slow["uniform_local_cl_required"],
+        "slow_drag_n": slow["drag_n"],
+        "slow_natural_drag_n": slow["natural_drag_n"],
+        "slow_added_drag_required_n": slow["added_drag_required_n"],
+        "slow_thrust_required_n": slow["thrust_required_n"],
+        "slow_throttle_percent": slow["throttle_percent"],
+        "slow_rpm": slow["rpm"],
+        "slow_power_w": slow["power_w"],
+        "slow_blown_effective_velocity_mps": slow["blown_effective_velocity_mps"],
+        "slow_effective_dynamic_pressure_pa": slow["effective_dynamic_pressure_pa"],
+        "slow_unblown_local_cl": slow["unblown_local_cl"],
+        "slow_blown_local_cl": slow["blown_local_cl"],
+        "slow_local_cl_margin": slow["local_cl_margin"],
+        "approach_cl_required": approach["approach_cl_required"],
+        "approach_uniform_local_cl_required": approach["approach_uniform_local_cl_required"],
+        "approach_drag_n": approach["approach_drag_n"],
+        "approach_thrust_required_n": approach["approach_thrust_required_n"],
+        "approach_throttle_percent": approach["approach_throttle_percent"],
+        "approach_rpm": approach["approach_rpm"],
+        "approach_power_w": approach["approach_power_w"],
+        "approach_blown_effective_velocity_mps": approach["approach_blown_effective_velocity_mps"],
+        "approach_effective_dynamic_pressure_pa": approach["approach_effective_dynamic_pressure_pa"],
+        "approach_elevator_trim_deg": approach["approach_elevator_trim_deg"],
+        "approach_rpm_feasible": approach["approach_rpm_feasible"],
+        "climb_cl_required": climb["climb_cl_required"],
+        "climb_uniform_local_cl_required": climb["climb_uniform_local_cl_required"],
+        "climb_drag_n": climb["climb_drag_n"],
+        "climb_thrust_required_n": climb["climb_thrust_required_n"],
+        "climb_throttle_percent": climb["climb_throttle_percent"],
+        "climb_rpm": climb["climb_rpm"],
+        "climb_power_w": climb["climb_power_w"],
+        "climb_blown_effective_velocity_mps": climb["climb_blown_effective_velocity_mps"],
+        "climb_effective_dynamic_pressure_pa": climb["climb_effective_dynamic_pressure_pa"],
+        "climb_elevator_trim_deg": climb["climb_elevator_trim_deg"],
+        "climb_rpm_feasible": climb["climb_rpm_feasible"],
     }
 
 
@@ -2130,7 +3391,12 @@ def generate_performance_sweep_outputs(
     onp = runtime.onp
     plt = runtime.plt
     clean_polar = _section_polar_from_stage3_polars(polars, "clean")
-    flapped_polar = _section_polar_from_stage3_polars(polars, "flaps_down")
+    flapped_polar = {
+        "alpha_deg": polars["alphas_deg"],
+        "CL": polars["flapped"]["CL"],
+        "CD": polars["flapped"]["CD"],
+        "CM": polars["flapped"]["CM"],
+    }
 
     velocities = onp.linspace(
         config.performance_sweep_velocity_min_mps,
@@ -2150,24 +3416,65 @@ def generate_performance_sweep_outputs(
         for velocity in velocities:
             q = 0.5 * mission.air_density_kgpm3 * float(velocity) ** 2
             cl_required = mission.gross_weight_n / max(q * mission.wing_area_m2, 1e-9)
-            alpha = _alpha_for_cl(polar, cl_required)
-            breakdown = _append_power_to_breakdown(
-                mission,
-                candidate,
-                _drag_breakdown_for_condition(
+            if mode == "flaps_down":
+                breakdown = _flaps_down_split_sweep_condition(
                     mission,
+                    candidate,
                     geometry,
                     config,
-                    polar,
+                    flapped_polar,
                     velocity_mps=float(velocity),
-                    alpha_deg=alpha,
-                    mode=mode,
-                ),
-                mode,
-                config,
-            )
-            
-            breakdown["cl_required"] = cl_required
+                    mass_kg=mission.gross_mass_kg,
+                )
+            else:
+                polar_cl = onp.asarray(polar["CL"], dtype=float)
+                max_cl = float(onp.nanmax(polar_cl))
+                min_cl = float(onp.nanmin(polar_cl))
+                if cl_required > max_cl or cl_required < min_cl:
+                    breakdown = {
+                        "velocity_mps": float(velocity),
+                        "alpha_deg": float("nan"),
+                        "cl": float("nan"),
+                        "cl_required": cl_required,
+                        "cm": float("nan"),
+                        "tail_cl": float("nan"),
+                        "wing_profile_drag_n": float("nan"),
+                        "wing_induced_drag_n": float("nan"),
+                        "htail_drag_n": float("nan"),
+                        "vtail_drag_n": float("nan"),
+                        "fuselage_drag_n": float("nan"),
+                        "total_drag_n": float("nan"),
+                        "power_w": float("nan"),
+                        "rpm": float("nan"),
+                        "thrust_required_n": float("nan"),
+                        "thrust_available_n": float("nan"),
+                        "rpm_feasible": 0.0,
+                        "trim_feasible": 0.0,
+                        "added_drag_required_n": float("nan"),
+                        "blown_effective_velocity_mps": float("nan"),
+                    }
+                else:
+                    alpha = _alpha_for_cl(polar, cl_required)
+                    breakdown = _append_power_to_breakdown(
+                        mission,
+                        candidate,
+                        _drag_breakdown_for_condition(
+                            mission,
+                            geometry,
+                            config,
+                            polar,
+                            velocity_mps=float(velocity),
+                            alpha_deg=alpha,
+                            mode=mode,
+                        ),
+                        mode,
+                        config,
+                    )
+                    breakdown["trim_feasible"] = breakdown["rpm_feasible"]
+                    breakdown["added_drag_required_n"] = 0.0
+                    breakdown["blown_effective_velocity_mps"] = float("nan")
+                    breakdown["power_w"] = _power_plot_value(breakdown)
+                breakdown["cl_required"] = cl_required
             velocity_curve.append(breakdown)
             rows.append({"mode": mode, "sweep_type": "velocity", **breakdown})
         curves[(mode, "velocity")] = velocity_curve
@@ -2175,23 +3482,38 @@ def generate_performance_sweep_outputs(
         alpha_curve: list[dict[str, float]] = []
         fixed_speed = config.flaps_down_sweep_speed_mps if mode == "flaps_down" else config.clean_sweep_speed_mps
         for alpha in alphas:
-            breakdown = _append_power_to_breakdown(
-                mission,
-                candidate,
-                _drag_breakdown_for_condition(
+            if mode == "flaps_down":
+                breakdown = _flaps_down_split_sweep_condition(
                     mission,
+                    candidate,
                     geometry,
                     config,
-                    polar,
+                    flapped_polar,
                     velocity_mps=fixed_speed,
                     alpha_deg=float(alpha),
-                    mode=mode,
-                ),
-                mode,
-                config,
-            )
-            
-            breakdown["cl_required"] = float("nan")
+                    mass_kg=mission.gross_mass_kg,
+                )
+            else:
+                breakdown = _append_power_to_breakdown(
+                    mission,
+                    candidate,
+                    _drag_breakdown_for_condition(
+                        mission,
+                        geometry,
+                        config,
+                        polar,
+                        velocity_mps=fixed_speed,
+                        alpha_deg=float(alpha),
+                        mode=mode,
+                    ),
+                    mode,
+                    config,
+                )
+                breakdown["trim_feasible"] = breakdown["rpm_feasible"]
+                breakdown["added_drag_required_n"] = 0.0
+                breakdown["blown_effective_velocity_mps"] = float("nan")
+                breakdown["power_w"] = _power_plot_value(breakdown)
+                breakdown["cl_required"] = float("nan")
             alpha_curve.append(breakdown)
             rows.append({"mode": mode, "sweep_type": "alpha", **breakdown})
         curves[(mode, "alpha")] = alpha_curve
@@ -2217,6 +3539,9 @@ def generate_performance_sweep_outputs(
         "thrust_required_n",
         "thrust_available_n",
         "rpm_feasible",
+        "trim_feasible",
+        "added_drag_required_n",
+        "blown_effective_velocity_mps",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -2234,10 +3559,62 @@ def generate_performance_sweep_outputs(
         axs[0, 1].plot([p["alpha_deg"] for p in a_curve], [p["total_drag_n"] for p in a_curve], label=labels[mode], color=colors[mode])
         axs[1, 1].plot([p["alpha_deg"] for p in a_curve], [p["power_w"] for p in a_curve], label=labels[mode], color=colors[mode])
 
+    def set_axis_limits_from_data(ax: Any, x_values: list[float], y_values: list[float]) -> None:
+        finite_x = [float(value) for value in x_values if math.isfinite(float(value))]
+        finite_y = [float(value) for value in y_values if math.isfinite(float(value))]
+        if finite_x:
+            x_min = min(finite_x)
+            x_max = max(finite_x)
+            x_pad = 0.03 * max(x_max - x_min, 1.0)
+            ax.set_xlim(x_min - x_pad, x_max + x_pad)
+        if finite_y:
+            y_min = min(finite_y)
+            y_max = max(finite_y)
+            if y_max <= y_min:
+                y_pad = max(abs(y_max) * 0.08, 1.0)
+            else:
+                y_pad = 0.08 * (y_max - y_min)
+            ax.set_ylim(min(0.0, y_min - y_pad), y_max + y_pad)
+
+    velocity_x = [
+        point["velocity_mps"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "velocity")]
+    ]
+    alpha_x = [
+        point["alpha_deg"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "alpha")]
+    ]
+    velocity_drag_y = [
+        point["total_drag_n"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "velocity")]
+    ]
+    velocity_power_y = [
+        point["power_w"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "velocity")]
+    ]
+    alpha_drag_y = [
+        point["total_drag_n"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "alpha")]
+    ]
+    alpha_power_y = [
+        point["power_w"]
+        for mode in ("clean", "flaps_down")
+        for point in curves[(mode, "alpha")]
+    ]
+    set_axis_limits_from_data(axs[0, 0], velocity_x, velocity_drag_y)
+    set_axis_limits_from_data(axs[1, 0], velocity_x, velocity_power_y)
+    set_axis_limits_from_data(axs[0, 1], alpha_x, alpha_drag_y)
+    set_axis_limits_from_data(axs[1, 1], alpha_x, alpha_power_y)
+
     axs[0, 0].set_title("Total Drag vs Velocity")
     axs[0, 1].set_title("Total Drag vs Angle of Attack")
-    axs[1, 0].set_title("Drag-Balance Electrical Power vs Velocity")
-    axs[1, 1].set_title("Drag-Balance Electrical Power vs Angle of Attack")
+    axs[1, 0].set_title("Electrical Power Required vs Velocity")
+    axs[1, 1].set_title("Electrical Power Required vs Angle of Attack")
     axs[0, 0].set_xlabel("Velocity [m/s]")
     axs[1, 0].set_xlabel("Velocity [m/s]")
     axs[0, 1].set_xlabel("Angle of attack [deg]")
@@ -2250,8 +3627,8 @@ def generate_performance_sweep_outputs(
         ax.grid(True, alpha=0.3)
         ax.legend()
     note = (
-        "Power curves balance the plotted section-polar drag. "
-        "The reported slow-flight power is the separate blown-lift slipstream design point."
+        "Clean power balances trimmed drag; flaps-down power uses the split blown/unblown wing model. "
+        "Infeasible max-RPM points are omitted instead of plotted as saturated power."
     )
     fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8, color="#374151")
     fig.tight_layout()
@@ -2267,7 +3644,8 @@ def generate_performance_sweep_outputs(
         "Fuselage": geometry["cruise_fuselage_drag_n"],
     }
     slow_components = {
-        "Stage 1/2 flap baseline": geometry["low_speed_stage1_baseline_drag_n"],
+        "Wing profile": geometry["low_speed_wing_profile_drag_n"],
+        "Wing induced (used)": geometry["low_speed_wing_induced_drag_n"],
         "H-tail": geometry["low_speed_htail_drag_n"],
         "V-tail": geometry["low_speed_vtail_drag_n"],
         "Fuselage": geometry["low_speed_fuselage_drag_n"],
@@ -2280,7 +3658,8 @@ def generate_performance_sweep_outputs(
     ):
         names = list(components)
         values = [components[name] for name in names]
-        bars = ax.barh(names, values, color=["#2563eb", "#60a5fa", "#14b8a6", "#a78bfa", "#f97316"][: len(names)])
+        palette = ["#2563eb", "#60a5fa", "#14b8a6", "#a78bfa", "#f97316", "#ef4444"]
+        bars = ax.barh(names, values, color=[palette[i % len(palette)] for i in range(len(names))])
         ax.set_title(title)
         ax.set_xlabel("Drag [N]")
         ax.grid(True, axis="x", alpha=0.25)
@@ -2298,11 +3677,19 @@ def generate_performance_sweep_outputs(
         candidate,
         flapped_polar,
     )
+    climb = calculate_climb_trim(
+        mission,
+        geometry,
+        config,
+        candidate,
+        clean_polar,
+    )
     return {
         "performance_sweep_csv": str(csv_path),
         "drag_power_sweeps_png": str(plot_path),
         "drag_components_png": str(components_path),
         **approach,
+        **climb,
     }
 
 
@@ -2400,7 +3787,8 @@ def write_stage3_report(
         f"- Main wing area: `{mission.wing_area_m2:.3f} m^2`",
         f"- Fuselage nose station: `{config.fuselage_nose_x_m:.3f} m` from wing leading edge",
         f"- Fuselage cross-section: `{config.fuselage_width_m * 1000.0:.0f} mm` wide x `{config.fuselage_height_m * 1000.0:.0f} mm` tall",
-        f"- Low-speed mode: `{mission.low_speed_mps:.3f} m/s`",
+        f"- Stage 3 slow-flight mode: `{_stage3_slow_flight_speed_mps(config):.3f} m/s`",
+        f"- Upstream Stage 1/2 low-speed mode remains: `{mission.low_speed_mps:.3f} m/s`",
         f"- Cruise mode: `{mission.cruise_speed_mps:.3f} m/s`",
         f"- Foam density: `{config.foam_density_kgpm3:.1f} kg/m^3`",
         f"- eCalc propulsion calibration enabled: `{config.ecalc_propulsion_enabled}`",
@@ -2412,7 +3800,7 @@ def write_stage3_report(
         "- Horizontal and vertical stabilizer planform dimensions are optimized primarily for cruise trim, cruise drag, material mass, static margin, and the user-specified tail-volume ranges.",
         "- Elevator and rudder chord fractions are sized separately after planform optimization to meet slow-flight pitch and yaw authority targets.",
         "- Slow-flight sizing is evaluated with the frozen slotted flaps deployed.",
-        f"- Slow-flight CLmax values are read from the selected Stage 1/2 wing workflow when available; the sizing CLmax values are then divided by the stall margin factor `{config.slow_flight_stall_margin_factor:.2f}`.",
+        "- Raw Stage 1/2 equivalent CLmax values are read for traceability. Physical local CLmax limits come from the Stage 1/2 NeuralFoil flap-sweep section polars when available; the YAML values are only fallbacks. Blown lift is modeled through higher local dynamic pressure, not through unphysical airfoil CLmax.",
         f"- Fuselage drag is included as an equivalent parasite drag area, `CdA = {config.fuselage_cd_area_m2:.3f} m^2`, so `D_fuse = q * CdA`.",
         "- Tail foam mass is added to the Stage 1/2 built-mass estimate before checking the mass margin.",
         "- Tail sizing is constrained by horizontal/vertical tail volume, static margin, trim incidence, material mass, and prop RPM feasibility.",
@@ -2435,6 +3823,9 @@ def write_stage3_report(
                 f"| Main wing span | {float(best['wing_span_m']):.3f} m |",
                 f"| Main wing chord | {float(best['wing_chord_m']):.3f} m |",
                 f"| Main wing incidence | {float(best['main_wing_incidence_deg']):.3f} deg |",
+                f"| Cruise body alpha proxy | {float(best['cruise_body_alpha_proxy_deg']):.3f} deg |",
+                f"| Cruise wing section alpha proxy | {float(best['cruise_section_alpha_proxy_deg']):.3f} deg |",
+                f"| Cruise VLM trim alpha diagnostic | {float(best['cruise_alpha_deg']):.3f} deg |",
                 f"| Propeller axial x position | {float(best['prop_axial_x_m']):.3f} m |",
                 f"| Fuselage nose station | {float(best['fuselage_nose_x_m']):.3f} m from wing LE |",
                 f"| Fuselage width x height | {float(best['fuselage_width_m']) * 1000.0:.0f} mm x {float(best['fuselage_height_m']) * 1000.0:.0f} mm |",
@@ -2456,60 +3847,146 @@ def write_stage3_report(
                 f"| V-tail volume range / actual | {float(best['vertical_tail_volume_min']):.3f}-{float(best['vertical_tail_volume_max']):.3f} / {float(best['vertical_tail_volume']):.3f} |",
                 f"| Slow pitch control authority / target | {float(best['slow_pitch_control_cm_authority']):.3f} / {float(best['target_slow_pitch_control_cm']):.3f} Cm |",
                 f"| Slow yaw control authority / target | {float(best['slow_yaw_control_cn_authority']):.3f} / {float(best['target_slow_yaw_control_cn']):.3f} Cn |",
-                f"| Stage 3 built mass | {float(best['stage3_total_built_mass_kg']):.3f} kg |",
+                f"| Gross flight mass used in all lift/trim calculations | {float(best['gross_flight_mass_kg']):.3f} kg |",
+                f"| Component-estimated built mass before ballast/payload | {float(best['stage3_total_built_mass_kg']):.3f} kg |",
+                f"| Remaining mass to 5 kg gross target | {float(best['remaining_mass_to_gross_kg']):.3f} kg |",
                 f"| Tail foam mass | {float(best['total_tail_foam_mass_kg']):.3f} kg |",
-                f"| Stage 1/2 no-flap CLmax | {float(best['no_flap_clmax']):.3f} |",
-                f"| Stage 1/2 flap-only CLmax | {float(best['flap_only_clmax']):.3f} |",
-                f"| Stage 1/2 clean blown CLmax | {float(best['clean_blowing_clmax']):.3f} |",
-                f"| Stage 1/2 flap-down blown CLmax | {float(best['flap_down_blown_clmax']):.3f} |",
-                f"| Slow-flight flap-down CLmax, unblown | {float(best['slow_flight_unblown_clmax']):.3f} |",
-                f"| Slow-flight flap-down CLmax, blown | {float(best['slow_flight_blown_clmax']):.3f} |",
+                f"| Physical CLmax source | {best['physical_clmax_source']} |",
+                f"| Stage 1/2 clean section CLmax, unblown / blown | {float(best['stage12_clean_section_clmax_unblown']):.3f} / {float(best['stage12_clean_section_clmax_blown']):.3f} |",
+                f"| Stage 1/2 flapped section CLmax, unblown / blown | {float(best['stage12_flapped_section_clmax_unblown']):.3f} / {float(best['stage12_flapped_section_clmax_blown']):.3f} |",
+                f"| Physical no-flap CLmax used | {float(best['no_flap_clmax']):.3f} |",
+                f"| Physical flap-only CLmax used | {float(best['flap_only_clmax']):.3f} |",
+                f"| Physical weighted blown-panel CLmax used | {float(best['stage12_weighted_blown_physical_clmax']):.3f} |",
+                f"| Raw Stage 1/2 flap-down blown equivalent CLmax | {float(best['raw_flap_down_blown_clmax']):.3f} |",
+                f"| Stage 1/2 equivalent CLmax capped? | {bool(float(best['clmax_was_capped']))} |",
+                f"| Slow-flight flap-down CLmax, unblown equivalent | {float(best['slow_flight_unblown_equivalent_clmax']):.3f} |",
+                f"| Slow-flight flap-down CLmax, blown equivalent | {float(best['slow_flight_blown_equivalent_clmax']):.3f} |",
+                f"| Slow-flight blown-panel local physical CLmax | {float(best['slow_flight_blown_local_clmax']):.3f} |",
                 f"| Slow-flight lift margin | {float(best['slow_flight_lift_margin_percent']):.1f}% |",
                 f"| Cruise fuselage drag | {float(best['cruise_fuselage_drag_n']):.3f} N |",
                 f"| Cruise power | {float(best['cruise_power_w']):.2f} W |",
+                f"| Cruise freestream CL / local blown-wing CL / RPM | {float(best['cruise_cl_required']):.3f} / {float(best['cruise_uniform_local_cl_required']):.3f} / {float(best['cruise_rpm']):.0f} rpm |",
+                f"| Cruise q unblown / blown / effective | {float(best['cruise_unblown_dynamic_pressure_pa']):.1f} / {float(best['cruise_blown_dynamic_pressure_pa']):.1f} / {float(best['cruise_effective_dynamic_pressure_pa']):.1f} Pa |",
+                f"| Cruise blown effective velocity | {float(best['cruise_blown_effective_velocity_mps']):.3f} m/s |",
                 f"| Cruise CT / CP | {float(best['cruise_ct']):.4f} / {float(best['cruise_cp']):.4f} |",
+                f"| Power loss factors, wiring / avionics | {float(best['wiring_power_loss_factor']):.3f} / {float(best['avionics_power_loss_factor']):.3f} |",
+                f"| Cruise aircraft electrical losses | {float(best['cruise_aircraft_power_losses_w']):.2f} W |",
                 f"| Slow-flight power | {float(best['low_speed_power_w']):.2f} W |",
+                f"| Slow-flight freestream CL / uniform local CL / RPM | {float(best['slow_flight_freestream_cl_required']):.3f} / {float(best['slow_flight_uniform_local_cl_required']):.3f} / {float(best['low_speed_rpm']):.0f} rpm |",
+                f"| Slow-flight local CL, unblown / blown panels | {float(best['slow_flight_unblown_local_cl']):.3f} / {float(best['slow_flight_blown_local_cl']):.3f} |",
+                f"| Slow-flight q unblown / blown / effective | {float(best['slow_flight_unblown_dynamic_pressure_pa']):.1f} / {float(best['slow_flight_blown_dynamic_pressure_pa']):.1f} / {float(best['slow_flight_effective_dynamic_pressure_pa']):.1f} Pa |",
                 f"| Slow-flight CT / CP | {float(best['low_speed_ct']):.4f} / {float(best['low_speed_cp']):.4f} |",
+                f"| Slow-flight aircraft electrical losses | {float(best['low_speed_aircraft_power_losses_w']):.2f} W |",
                 f"| Slow-flight natural drag before added drag | {float(best['low_speed_natural_drag_n']):.3f} N |",
+                f"| Slow-flight wing profile drag | {float(best['low_speed_wing_profile_drag_n']):.3f} N |",
+                f"| Slow-flight wing induced drag used | {float(best['low_speed_wing_induced_drag_n']):.3f} N |",
+                f"| Slow-flight induced drag, local blown-panel estimate | {float(best['low_speed_wing_induced_local_drag_n']):.3f} N |",
+                f"| Slow-flight induced drag, freestream-equivalent check | {float(best['low_speed_wing_induced_freestream_equiv_drag_n']):.3f} N |",
                 f"| Slow-flight added drag required | {float(best['low_speed_added_drag_required_n']):.3f} N |",
                 f"| Slow-flight steady total drag | {float(best['low_speed_drag_n']):.3f} N |",
                 f"| Slow-flight steady drag minus cruise drag | {float(best['low_speed_drag_delta_vs_cruise_n']):.3f} N |",
                 f"| Main wing Reynolds number, cruise / slow | {float(best['main_wing_re_cruise']):.0f} / {float(best['main_wing_re_low_speed']):.0f} |",
                 f"| H-tail Reynolds number, cruise / slow | {float(best['htail_re_cruise']):.0f} / {float(best['htail_re_low_speed']):.0f} |",
                 f"| V-tail Reynolds number, cruise / slow | {float(best['vtail_re_cruise']):.0f} / {float(best['vtail_re_low_speed']):.0f} |",
-                f"| Approach target angle | {float(best['approach_target_angle_deg']):.2f} deg below horizontal |",
+                f"| Approach target sink rate | {float(best['approach_target_sink_rate_fps']):.2f} ft/s |",
+                f"| Actual approach sink rate | {float(best['approach_sink_rate_fps']):.2f} ft/s |",
+                f"| Approach sink-rate target met? | {bool(float(best['approach_sink_rate_target_met']))} |",
+                f"| Approach descent angle | {float(best['approach_target_angle_deg']):.2f} deg below horizontal |",
                 f"| Approach speed | {float(best['approach_speed_mps']):.2f} m/s |",
+                f"| Approach/descent CL required / RPM | {float(best['approach_cl_required']):.3f} / {float(best['approach_rpm']):.0f} rpm |",
                 f"| Approach elevator trim | {float(best['approach_elevator_trim_deg']):.2f} deg |",
                 f"| Approach throttle estimate | {float(best['approach_throttle_percent']):.1f}% |",
+                "",
+                "## Flight-Condition Operating Values",
+                "",
+                "| Condition | Speed [m/s] | RPM | Thrust [N] | Throttle [%] | Blown velocity [m/s] | q unblown/blown/eff [Pa] | CL free/local | Drag [N] | Power [W] |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                f"| Cruise, clean | {mission.cruise_speed_mps:.2f} | {float(best['cruise_rpm']):.0f} | {float(best['cruise_thrust_required_n']):.3f} | {float(best['cruise_throttle_percent']):.1f} | {float(best['cruise_blown_effective_velocity_mps']):.2f} | {float(best['cruise_unblown_dynamic_pressure_pa']):.1f}/{float(best['cruise_blown_dynamic_pressure_pa']):.1f}/{float(best['cruise_effective_dynamic_pressure_pa']):.1f} | {float(best['cruise_cl_required']):.3f}/{float(best['cruise_uniform_local_cl_required']):.3f} | {float(best['cruise_drag_n']):.3f} | {float(best['cruise_power_w']):.2f} |",
+                f"| Slow flight, flaps down | {_stage3_slow_flight_speed_mps(config):.2f} | {float(best['low_speed_rpm']):.0f} | {float(best['low_speed_thrust_required_n']):.3f} | {float(best['low_speed_throttle_percent']):.1f} | {float(best['low_speed_actual_veff_mps']):.2f} | {float(best['slow_flight_unblown_dynamic_pressure_pa']):.1f}/{float(best['slow_flight_blown_dynamic_pressure_pa']):.1f}/{float(best['slow_flight_effective_dynamic_pressure_pa']):.1f} | {float(best['slow_flight_freestream_cl_required']):.3f}/{float(best['slow_flight_uniform_local_cl_required']):.3f}; split {float(best['slow_flight_unblown_local_cl']):.3f}/{float(best['slow_flight_blown_local_cl']):.3f} | {float(best['low_speed_drag_n']):.3f} | {float(best['low_speed_power_w']):.2f} |",
+                f"| Approach/descent, flaps down | {float(best['approach_speed_mps']):.2f} | {float(best['approach_rpm']):.0f} | {float(best['approach_thrust_required_n']):.3f} | {float(best['approach_throttle_percent']):.1f} | {float(best['approach_blown_effective_velocity_mps']):.2f} | {float(best['approach_unblown_dynamic_pressure_pa']):.1f}/{float(best['approach_blown_dynamic_pressure_pa']):.1f}/{float(best['approach_effective_dynamic_pressure_pa']):.1f} | {float(best['approach_cl_required']):.3f}/{float(best['approach_uniform_local_cl_required']):.3f} | {float(best['approach_drag_n']):.3f} | {float(best['approach_power_w']):.2f} |",
+                f"| Climb, clean | {float(best['climb_speed_mps']):.2f} | {float(best['climb_rpm']):.0f} | {float(best['climb_thrust_required_n']):.3f} | {float(best['climb_throttle_percent']):.1f} | {float(best['climb_blown_effective_velocity_mps']):.2f} | {float(best['climb_unblown_dynamic_pressure_pa']):.1f}/{float(best['climb_blown_dynamic_pressure_pa']):.1f}/{float(best['climb_effective_dynamic_pressure_pa']):.1f} | {float(best['climb_cl_required']):.3f}/{float(best['climb_uniform_local_cl_required']):.3f} | {float(best['climb_drag_n']):.3f} | {float(best['climb_power_w']):.2f} |",
+                "",
+                "## Battery Capacity Estimate",
+                "",
+                "| Segment | Duration [min] | Power [W] | Energy [Wh] |",
+                "| --- | ---: | ---: | ---: |",
+                f"| Cruise | {float(best['battery_cruise_segment_min']):.1f} | {float(best['cruise_power_w']):.2f} | {float(best['battery_cruise_energy_wh']):.2f} |",
+                f"| Slow flight | {float(best['battery_slow_segment_min']):.1f} | {float(best['low_speed_power_w']):.2f} | {float(best['battery_slow_energy_wh']):.2f} |",
+                f"| Usable energy subtotal | {float(best['battery_cruise_segment_min']) + float(best['battery_slow_segment_min']):.1f} | -- | {float(best['battery_usable_energy_wh']):.2f} |",
+                f"| Pack capacity with {float(best['battery_reserve_fraction']) * 100.0:.0f}% reserve | -- | -- | {float(best['battery_capacity_required_wh']):.2f} |",
+                "",
+                f"Equivalent 4S LiPo capacity for this conservative sizing case: `{float(best['battery_capacity_required_mah']):.0f} mAh` at `{float(best['battery_pack_voltage_v']):.1f} V` nominal.",
+                "",
+                f"Estimated battery mass at {mission.battery_specific_energy_wh_per_kg:.0f} Wh/kg: `{float(best['battery_mass_required_kg']):.3f} kg`.",
+                "",
+                "## Mission Regime Energy Table",
+                "",
+                *_mission_regime_markdown_lines(best, mission, config),
+                "",
+                f"Required battery for this regime table: `{float(best['mission_profile_capacity_required_mah']):.0f} mAh` at `{float(best['mission_profile_pack_voltage_v']):.1f} V` nominal (`{int(float(best['mission_profile_battery_cell_count']))}S LiPo`), including `{float(best['mission_profile_reserve_fraction']) * 100.0:.0f}%` reserve. Usable energy before reserve is `{float(best['mission_profile_usable_energy_wh']):.2f} Wh`; reserve-adjusted capacity is `{float(best['mission_profile_capacity_required_wh']):.2f} Wh`.",
+                "",
+                "Takeoff is estimated from the payload-on climb condition. Landing is estimated from the post-delivery flaps-down slow/flare condition, which avoids using the saturated steep-approach thrust case as the final landing power.",
+                "",
+                "## Payload-On vs Post-Delivery Performance",
+                "",
+                f"Payload mass is `{float(best['payload_mass_lb']):.2f} lb` (`{float(best['payload_mass_kg']):.3f} kg`). Battery sizing uses the payload-on case for the whole mission, so a canceled delivery can return home without re-sizing the pack.",
+                "",
+                "| Configuration | Mass [kg] | Cruise P/RPM/throttle | Slow P/RPM/throttle | Approach P/RPM/throttle | Climb P/RPM/throttle |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+                f"| Payload on | {float(best['payload_on_mass_kg']):.3f} | {float(best['payload_on_cruise_power_w']):.1f} W / {float(best['payload_on_cruise_rpm']):.0f} rpm / {float(best['payload_on_cruise_throttle_percent']):.1f}% | {float(best['payload_on_slow_power_w']):.1f} W / {float(best['payload_on_slow_rpm']):.0f} rpm / {float(best['payload_on_slow_throttle_percent']):.1f}% | {float(best['payload_on_approach_power_w']):.1f} W / {float(best['payload_on_approach_rpm']):.0f} rpm / {float(best['payload_on_approach_throttle_percent']):.1f}% | {float(best['payload_on_climb_power_w']):.1f} W / {float(best['payload_on_climb_rpm']):.0f} rpm / {float(best['payload_on_climb_throttle_percent']):.1f}% |",
+                f"| Post delivery | {float(best['post_delivery_mass_kg']):.3f} | {float(best['post_delivery_cruise_power_w']):.1f} W / {float(best['post_delivery_cruise_rpm']):.0f} rpm / {float(best['post_delivery_cruise_throttle_percent']):.1f}% | {float(best['post_delivery_slow_power_w']):.1f} W / {float(best['post_delivery_slow_rpm']):.0f} rpm / {float(best['post_delivery_slow_throttle_percent']):.1f}% | {float(best['post_delivery_approach_power_w']):.1f} W / {float(best['post_delivery_approach_rpm']):.0f} rpm / {float(best['post_delivery_approach_throttle_percent']):.1f}% | {float(best['post_delivery_climb_power_w']):.1f} W / {float(best['post_delivery_climb_rpm']):.0f} rpm / {float(best['post_delivery_climb_throttle_percent']):.1f}% |",
+                "",
+                "## Main-Wing Stall / Pitch-Up Margin",
+                "",
+                f"Stage 3 assumes a `{float(best['main_wing_pitch_up_stall_margin_factor']):.2f}x` local-CL pitch-up margin for executive review. This means the aircraft should operate at no more than `{100.0 / float(best['main_wing_pitch_up_stall_margin_factor']):.0f}%` of local CLmax in clean pitch-up review conditions.",
+                "",
+                "| Case | Cruise pitch-up margin | Climb pitch-up margin |",
+                "| --- | ---: | ---: |",
+                f"| Payload on | {float(best['payload_on_cruise_pitch_up_stall_margin_percent']):.1f}% | {float(best['payload_on_climb_pitch_up_stall_margin_percent']):.1f}% |",
+                f"| Post delivery | {float(best['post_delivery_cruise_pitch_up_stall_margin_percent']):.1f}% | {float(best['post_delivery_climb_pitch_up_stall_margin_percent']):.1f}% |",
                 "",
                 "## Drag Components",
                 "",
                 "| Component | Clean cruise drag [N] | Flaps-down slow-flight drag [N] |",
                 "| --- | ---: | ---: |",
-                f"| Main wing profile / Stage 1 flap baseline | {float(best['cruise_wing_profile_drag_n']):.3f} | {float(best['low_speed_stage1_baseline_drag_n']):.3f} |",
-                f"| Main wing induced | {float(best['cruise_wing_induced_drag_n']):.3f} | Included in Stage 1 baseline |",
+                f"| Main wing profile | {float(best['cruise_wing_profile_drag_n']):.3f} | {float(best['low_speed_wing_profile_drag_n']):.3f} |",
+                f"| Main wing induced, used | {float(best['cruise_wing_induced_drag_n']):.3f} | {float(best['low_speed_wing_induced_drag_n']):.3f} |",
                 f"| Horizontal tail | {float(best['cruise_htail_drag_n']):.3f} | {float(best['low_speed_htail_drag_n']):.3f} |",
                 f"| Vertical tail | {float(best['cruise_vtail_drag_n']):.3f} | {float(best['low_speed_vtail_drag_n']):.3f} |",
                 f"| Fuselage | {float(best['cruise_fuselage_drag_n']):.3f} | {float(best['low_speed_fuselage_drag_n']):.3f} |",
                 f"| Added drag required to cancel blown-lift thrust | 0.000 | {float(best['low_speed_added_drag_required_n']):.3f} |",
                 f"| Total | {float(best['cruise_drag_n']):.3f} | {float(best['low_speed_drag_n']):.3f} |",
                 "",
+                "Slow-flight induced drag is the physical split-panel sum: unblown-panel induced drag plus blown-panel induced drag. The freestream-equivalent finite-wing value is reported only as a diagnostic check and is not used in the force balance.",
+                "",
                 "## Approach Estimate",
                 "",
                 "| Quantity | Value |",
                 "| --- | ---: |",
-                f"| Target descent angle | {float(best['approach_target_angle_deg']):.2f} deg |",
+                f"| Target sink rate | {float(best['approach_target_sink_rate_fps']):.2f} ft/s |",
+                f"| Actual sink rate | {float(best['approach_sink_rate_fps']):.2f} ft/s |",
+                f"| Sink-rate target met? | {bool(float(best['approach_sink_rate_target_met']))} |",
+                f"| Descent angle | {float(best['approach_target_angle_deg']):.2f} deg |",
                 f"| Flap deflection | {float(best['approach_flap_deflection_deg']):.1f} deg |",
                 f"| Approach alpha | {float(best['approach_alpha_deg']):.2f} deg |",
                 f"| Required thrust | {float(best['approach_thrust_required_n']):.3f} N |",
                 f"| Electrical power | {float(best['approach_power_w']):.2f} W |",
                 f"| RPM | {float(best['approach_rpm']):.0f} rpm |",
-                f"| Throttle estimate | {float(best['approach_throttle_percent']):.1f}% |",
-                f"| Propulsion feasible at approach | {bool(float(best['approach_rpm_feasible']))} |",
-                f"| Elevator trim | {float(best['approach_elevator_trim_deg']):.2f} deg |",
-                f"| Rudder trim | {float(best['approach_rudder_trim_deg']):.2f} deg |",
-                f"| Sink rate | {float(best['approach_sink_rate_mps']):.3f} m/s |",
-                "",
+            f"| Throttle estimate | {float(best['approach_throttle_percent']):.1f}% |",
+            f"| Propulsion feasible at approach | {bool(float(best['approach_rpm_feasible']))} |",
+            f"| Elevator trim | {float(best['approach_elevator_trim_deg']):.2f} deg |",
+            f"| Rudder trim | {float(best['approach_rudder_trim_deg']):.2f} deg |",
+            f"| Max descent rate limit | {float(best['approach_max_descent_rate_fps']):.1f} ft/s |",
+                f"| Sink rate | {float(best['approach_sink_rate_mps']):.3f} m/s ({float(best['approach_sink_rate_fps']):.2f} ft/s) |",
+            f"| Descent rate limited? | {bool(float(best['approach_descent_rate_limited']))} |",
+            f"| Climb target rate | {float(best['climb_target_rate_fps']):.1f} ft/s |",
+            f"| Climb speed | {float(best['climb_speed_mps']):.2f} m/s |",
+            f"| Climb angle | {float(best['climb_angle_deg']):.2f} deg |",
+            f"| Climb CL required | {float(best['climb_cl_required']):.3f} |",
+            f"| Climb thrust required | {float(best['climb_thrust_required_n']):.3f} N |",
+            f"| Climb throttle estimate | {float(best['climb_throttle_percent']):.1f}% |",
+            f"| Climb feasible | {bool(float(best['climb_rpm_feasible']))} |",
+            "",
                 "## Best-Design Artifacts",
                 "",
                 f"- Top view: `{best['top_view_png']}`",
@@ -2670,8 +4147,12 @@ def write_stage3_readable_results(
             f"| Horizontal tail foam mass | {float(row['htail_foam_mass_kg']):.3f} kg |",
             f"| Vertical tail foam mass | {float(row['vtail_foam_mass_kg']):.3f} kg |",
             f"| Total tail foam mass | {float(row['total_tail_foam_mass_kg']):.3f} kg |",
-            f"| Stage 3 built mass | {float(row['stage3_total_built_mass_kg']):.3f} kg |",
+            f"| Gross flight mass used for lift/trim | {float(row['gross_flight_mass_kg']):.3f} kg |",
+            f"| Component-estimated built mass before ballast/payload | {float(row['stage3_total_built_mass_kg']):.3f} kg |",
+            f"| Remaining mass to gross target | {float(row['remaining_mass_to_gross_kg']):.3f} kg |",
             f"| Mass budget margin | {float(row['mass_budget_margin_kg']):.3f} kg |",
+            "",
+            "The component-estimated built mass is not the flight mass used in aerodynamics. Stage 3 keeps the aircraft gross flight mass locked at the Stage 1/2 value for lift, trim, climb, descent, and power calculations; the component estimate shows how much mass is currently accounted for by the Stage 1 propulsion/battery/system model plus the Stage 3 foam-tail model. The remaining mass is available for payload, structure not yet itemized, fasteners, wiring, covering, ballast, and contingency.",
             "",
             "## Aerodynamic Margins",
             "",
@@ -2680,52 +4161,135 @@ def write_stage3_readable_results(
             f"| Slow-flight flap state | Slotted flaps down |",
             f"| CLmax source | `{row['clmax_source']}` |",
             f"| CL curve source | `{row['clmax_curve_source']}` |",
-            f"| Stage 1/2 no-flap CLmax | {float(row['no_flap_clmax']):.3f} at alpha {float(row['no_flap_clmax_alpha_deg']):.2f} deg |",
-            f"| Stage 1/2 flap-only CLmax | {float(row['flap_only_clmax']):.3f} at alpha {float(row['flap_only_clmax_alpha_deg']):.2f} deg |",
-            f"| Stage 1/2 clean blown CLmax | {float(row['clean_blowing_clmax']):.3f} at alpha {float(row['clean_blowing_clmax_alpha_deg']):.2f} deg |",
-            f"| Stage 1/2 flap-down blown CLmax | {float(row['flap_down_blown_clmax']):.3f} at alpha {float(row['flap_down_blown_clmax_alpha_deg']):.2f} deg |",
+            f"| Stage 1/2 high-lift polar source | `{row['stage12_high_lift_polar_source']}` |",
+            f"| Physical CLmax source | `{row['physical_clmax_source']}` |",
+            f"| Stage 1/2 clean section CLmax, unblown / blown | {float(row['stage12_clean_section_clmax_unblown']):.3f} / {float(row['stage12_clean_section_clmax_blown']):.3f} |",
+            f"| Stage 1/2 flapped section CLmax, unblown / blown | {float(row['stage12_flapped_section_clmax_unblown']):.3f} / {float(row['stage12_flapped_section_clmax_blown']):.3f} |",
+            f"| Stage 1/2 weighted blown-panel physical CLmax | {float(row['stage12_weighted_blown_physical_clmax']):.3f} |",
+            f"| Raw Stage 1/2 no-flap CLmax | {float(row['raw_no_flap_clmax']):.3f} at alpha {float(row['no_flap_clmax_alpha_deg']):.2f} deg |",
+            f"| Raw Stage 1/2 flap-only CLmax | {float(row['raw_flap_only_clmax']):.3f} at alpha {float(row['flap_only_clmax_alpha_deg']):.2f} deg |",
+            f"| Raw Stage 1/2 clean blown equivalent CLmax | {float(row['raw_clean_blowing_clmax']):.3f} at alpha {float(row['clean_blowing_clmax_alpha_deg']):.2f} deg |",
+            f"| Raw Stage 1/2 flap-down blown equivalent CLmax | {float(row['raw_flap_down_blown_clmax']):.3f} at alpha {float(row['flap_down_blown_clmax_alpha_deg']):.2f} deg |",
+            f"| Physical clean CLmax used | {float(row['no_flap_clmax']):.3f} |",
+            f"| Physical flaps-down blown-panel CLmax used | {float(row['flap_down_blown_clmax']):.3f} |",
+            f"| Stage 1/2 equivalent CLmax capped? | {bool(float(row['clmax_was_capped']))} |",
             f"| Stall margin factor | {float(row['slow_flight_stall_margin_factor']):.2f} |",
-            f"| Unblown flap-down CLmax | {float(row['slow_flight_unblown_clmax']):.3f} |",
-            f"| Blown flap-down CLmax | {float(row['slow_flight_blown_clmax']):.3f} |",
+            f"| Unblown flap-down CLmax, freestream equivalent | {float(row['slow_flight_unblown_equivalent_clmax']):.3f} |",
+            f"| Blown flap-down CLmax, freestream equivalent at solved RPM | {float(row['slow_flight_blown_equivalent_clmax']):.3f} |",
+            f"| Blown-panel local physical CLmax | {float(row['slow_flight_blown_local_clmax']):.3f} |",
             f"| Design unblown CLmax after stall margin | {float(row['slow_flight_design_unblown_clmax']):.3f} |",
-            f"| Design blown CLmax after stall margin | {float(row['slow_flight_design_blown_clmax']):.3f} |",
+            f"| Design blown equivalent CLmax after stall margin | {float(row['slow_flight_design_blown_clmax']):.3f} |",
+            f"| Design blown-panel local CLmax after stall margin | {float(row['slow_flight_design_blown_local_clmax']):.3f} |",
             f"| Available slow-flight lift | {float(row['slow_flight_lift_available_n']):.3f} N |",
             f"| Required lift target with margin | {float(row['slow_flight_lift_target_n']):.3f} N |",
+            f"| Freestream-reference CL required at Stage 3 slow-flight speed | {float(row['slow_flight_freestream_cl_required']):.3f} |",
+            f"| Pressure-weighted uniform local CL required at solved slow RPM | {float(row['slow_flight_uniform_local_cl_required']):.3f} |",
+            f"| Unblown-panel local CL used | {float(row['slow_flight_unblown_local_cl']):.3f} |",
+            f"| Blown-panel local CL used | {float(row['slow_flight_blown_local_cl']):.3f} |",
+            f"| Slow-flight dynamic pressure, unblown / blown / effective | {float(row['slow_flight_unblown_dynamic_pressure_pa']):.1f} / {float(row['slow_flight_blown_dynamic_pressure_pa']):.1f} / {float(row['slow_flight_effective_dynamic_pressure_pa']):.1f} Pa |",
+            f"| Slow-flight blown-to-unblown dynamic-pressure ratio | {float(row['slow_flight_blown_to_unblown_q_ratio']):.2f} |",
+            f"| Slow-flight wing area, unblown / blown | {float(row['slow_flight_unblown_area_m2']):.3f} / {float(row['slow_flight_blown_area_m2']):.3f} m^2 |",
+            f"| Local CL margin to design cap | {float(row['slow_flight_local_cl_margin']):.3f} |",
+            f"| Required effective velocity margin | {float(row['slow_flight_required_veff_margin_mps']):.3f} m/s |",
+            f"| Slow-flight feasible with physical CL caps | {bool(float(row['slow_flight_feasible']))} |",
             f"| Slow-flight lift margin | {float(row['slow_flight_lift_margin_n']):.3f} N |",
             f"| Slow-flight lift margin percent | {float(row['slow_flight_lift_margin_percent']):.1f}% |",
             f"| Equivalent unblown flap-down stall speed with margin | {float(row['slow_flight_equiv_stall_speed_mps']):.3f} m/s |",
             "",
-            f"Stage 3 now uses the CLmax values already generated by Stage 1/2. The retained first-pass aerodynamic margin is the `{config.slow_flight_stall_margin_factor:.2f}` stall factor, which asks for {(config.slow_flight_stall_margin_factor - 1.0) * 100.0:.0f}% extra lift capacity to cover gusts, low-Reynolds-number losses, surface waviness, hinge gaps, and uncertainty in the blown-flow model. The older section-CLmax constants remain in `Stage3SizingConfig` only as a fallback if the Stage 1/2 workflow files are missing.",
+            f"Stage 3 no longer treats the large Stage 1/2 blown-lift equivalent CL values as physical airfoil CLmax. It reads the Stage 1/2 NeuralFoil-derived flap-sweep section polars first, then uses the YAML clean/flapped caps only as missing-file fallbacks. Propwash enters through the blown-panel dynamic pressure, so the local blown-panel CLmax remains physical while the freestream-referenced blown equivalent CLmax increases. The `{config.slow_flight_stall_margin_factor:.2f}` stall factor then requires {(config.slow_flight_stall_margin_factor - 1.0) * 100.0:.0f}% extra local-CL headroom.",
             "",
             "## Performance",
             "",
             "| Metric | Result |",
             "| --- | ---: |",
-            f"| Slow-flight speed | {mission.low_speed_mps:.2f} m/s |",
+            f"| Stage 3 slow-flight speed | {_stage3_slow_flight_speed_mps(config):.2f} m/s |",
+            f"| Upstream Stage 1/2 low-speed setting | {mission.low_speed_mps:.2f} m/s |",
+            f"| Slow-flight freestream CL / local CL / RPM | {float(row['slow_flight_freestream_cl_required']):.3f} / {float(row['slow_flight_uniform_local_cl_required']):.3f} / {float(row['low_speed_rpm']):.0f} rpm |",
             f"| Required blown velocity | {float(row['low_speed_required_veff_mps']):.3f} m/s |",
             f"| Actual blown velocity from solved RPM | {float(row['low_speed_actual_veff_mps']):.3f} m/s |",
             f"| Slow-flight natural drag before drag devices | {float(row['low_speed_natural_drag_n']):.3f} N |",
+            f"| Slow-flight wing profile drag | {float(row['low_speed_wing_profile_drag_n']):.3f} N |",
+            f"| Slow-flight wing induced drag used | {float(row['low_speed_wing_induced_drag_n']):.3f} N |",
+            f"| Slow-flight induced drag, local blown-panel estimate | {float(row['low_speed_wing_induced_local_drag_n']):.3f} N |",
+            f"| Slow-flight induced drag, freestream-equivalent check | {float(row['low_speed_wing_induced_freestream_equiv_drag_n']):.3f} N |",
             f"| Slow-flight blown-lift thrust | {float(row['low_speed_blown_lift_thrust_n']):.3f} N |",
             f"| Added drag required for no acceleration | {float(row['low_speed_added_drag_required_n']):.3f} N |",
             f"| Slow-flight steady total drag | {float(row['low_speed_drag_n']):.3f} N |",
             f"| Slow steady drag minus cruise drag | {float(row['low_speed_drag_delta_vs_cruise_n']):.3f} N |",
             f"| Slow-flight fuselage drag increment | {float(row['low_speed_fuselage_drag_n']):.3f} N |",
             f"| Slow-flight electrical power | {float(row['low_speed_power_w']):.2f} W |",
+            f"| Slow-flight aircraft electrical losses | {float(row['low_speed_aircraft_power_losses_w']):.2f} W |",
             f"| Slow-flight energy for configured segment | {float(row['low_speed_energy_wh']):.2f} Wh |",
             f"| Slow-flight RPM | {float(row['low_speed_rpm']):.0f} rpm |",
             f"| Slow-flight CT / CP | {float(row['low_speed_ct']):.4f} / {float(row['low_speed_cp']):.4f} |",
             f"| Cruise speed | {mission.cruise_speed_mps:.2f} m/s |",
+            f"| Cruise freestream CL / local CL / RPM | {float(row['cruise_cl_required']):.3f} / {float(row['cruise_uniform_local_cl_required']):.3f} / {float(row['cruise_rpm']):.0f} rpm |",
+            f"| Cruise blown effective velocity | {float(row['cruise_blown_effective_velocity_mps']):.3f} m/s |",
+            f"| Cruise dynamic pressure, unblown / blown / effective | {float(row['cruise_unblown_dynamic_pressure_pa']):.1f} / {float(row['cruise_blown_dynamic_pressure_pa']):.1f} / {float(row['cruise_effective_dynamic_pressure_pa']):.1f} Pa |",
+            f"| Cruise blown-to-unblown dynamic-pressure ratio | {float(row['cruise_blown_to_unblown_q_ratio']):.2f} |",
             f"| Cruise drag | {float(row['cruise_drag_n']):.3f} N |",
             f"| Cruise fuselage drag | {float(row['cruise_fuselage_drag_n']):.3f} N |",
             f"| Cruise electrical power | {float(row['cruise_power_w']):.2f} W |",
+            f"| Cruise aircraft electrical losses | {float(row['cruise_aircraft_power_losses_w']):.2f} W |",
+            f"| Power loss factors, wiring / avionics | {float(row['wiring_power_loss_factor']):.3f} / {float(row['avionics_power_loss_factor']):.3f} |",
             f"| Cruise RPM | {float(row['cruise_rpm']):.0f} rpm |",
             f"| Cruise CT / CP | {float(row['cruise_ct']):.4f} / {float(row['cruise_cp']):.4f} |",
-            f"| Cruise alpha | {float(row['cruise_alpha_deg']):.3f} deg |",
+            f"| Cruise body alpha proxy | {float(row['cruise_body_alpha_proxy_deg']):.3f} deg |",
+            f"| Cruise wing section alpha proxy | {float(row['cruise_section_alpha_proxy_deg']):.3f} deg |",
+            f"| Cruise VLM trim alpha diagnostic | {float(row['cruise_alpha_deg']):.3f} deg |",
             f"| Cruise CL | {float(row['cruise_cl']):.3f} |",
             f"| Cruise CD | {float(row['cruise_cd']):.4f} |",
             f"| Cruise L/D | {float(row['cruise_l_over_d']):.2f} |",
             f"| Trim lift residual | {float(row['trim_residual_lift_n']):.6f} N |",
             f"| Trim Cm residual | {float(row['trim_residual_cm']):.6f} |",
+            "",
+            "## Flight-Condition Operating Values",
+            "",
+            "| Condition | Speed [m/s] | RPM | Thrust [N] | Throttle [%] | Blown velocity [m/s] | q unblown/blown/eff [Pa] | CL free/local | Drag [N] | Power [W] |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            f"| Cruise, clean | {mission.cruise_speed_mps:.2f} | {float(row['cruise_rpm']):.0f} | {float(row['cruise_thrust_required_n']):.3f} | {float(row['cruise_throttle_percent']):.1f} | {float(row['cruise_blown_effective_velocity_mps']):.2f} | {float(row['cruise_unblown_dynamic_pressure_pa']):.1f}/{float(row['cruise_blown_dynamic_pressure_pa']):.1f}/{float(row['cruise_effective_dynamic_pressure_pa']):.1f} | {float(row['cruise_cl_required']):.3f}/{float(row['cruise_uniform_local_cl_required']):.3f} | {float(row['cruise_drag_n']):.3f} | {float(row['cruise_power_w']):.2f} |",
+            f"| Slow flight, flaps down | {_stage3_slow_flight_speed_mps(config):.2f} | {float(row['low_speed_rpm']):.0f} | {float(row['low_speed_thrust_required_n']):.3f} | {float(row['low_speed_throttle_percent']):.1f} | {float(row['low_speed_actual_veff_mps']):.2f} | {float(row['slow_flight_unblown_dynamic_pressure_pa']):.1f}/{float(row['slow_flight_blown_dynamic_pressure_pa']):.1f}/{float(row['slow_flight_effective_dynamic_pressure_pa']):.1f} | {float(row['slow_flight_freestream_cl_required']):.3f}/{float(row['slow_flight_uniform_local_cl_required']):.3f}; split {float(row['slow_flight_unblown_local_cl']):.3f}/{float(row['slow_flight_blown_local_cl']):.3f} | {float(row['low_speed_drag_n']):.3f} | {float(row['low_speed_power_w']):.2f} |",
+            f"| Approach/descent, flaps down | {float(row['approach_speed_mps']):.2f} | {float(row['approach_rpm']):.0f} | {float(row['approach_thrust_required_n']):.3f} | {float(row['approach_throttle_percent']):.1f} | {float(row['approach_blown_effective_velocity_mps']):.2f} | {float(row['approach_unblown_dynamic_pressure_pa']):.1f}/{float(row['approach_blown_dynamic_pressure_pa']):.1f}/{float(row['approach_effective_dynamic_pressure_pa']):.1f} | {float(row['approach_cl_required']):.3f}/{float(row['approach_uniform_local_cl_required']):.3f} | {float(row['approach_drag_n']):.3f} | {float(row['approach_power_w']):.2f} |",
+            f"| Climb, clean | {float(row['climb_speed_mps']):.2f} | {float(row['climb_rpm']):.0f} | {float(row['climb_thrust_required_n']):.3f} | {float(row['climb_throttle_percent']):.1f} | {float(row['climb_blown_effective_velocity_mps']):.2f} | {float(row['climb_unblown_dynamic_pressure_pa']):.1f}/{float(row['climb_blown_dynamic_pressure_pa']):.1f}/{float(row['climb_effective_dynamic_pressure_pa']):.1f} | {float(row['climb_cl_required']):.3f}/{float(row['climb_uniform_local_cl_required']):.3f} | {float(row['climb_drag_n']):.3f} | {float(row['climb_power_w']):.2f} |",
+            "",
+            "## Battery Capacity Estimate",
+            "",
+            "| Segment | Duration [min] | Power [W] | Energy [Wh] |",
+            "| --- | ---: | ---: | ---: |",
+            f"| Cruise | {float(row['battery_cruise_segment_min']):.1f} | {float(row['cruise_power_w']):.2f} | {float(row['battery_cruise_energy_wh']):.2f} |",
+            f"| Slow flight | {float(row['battery_slow_segment_min']):.1f} | {float(row['low_speed_power_w']):.2f} | {float(row['battery_slow_energy_wh']):.2f} |",
+            f"| Usable energy subtotal | {float(row['battery_cruise_segment_min']) + float(row['battery_slow_segment_min']):.1f} | -- | {float(row['battery_usable_energy_wh']):.2f} |",
+            f"| Pack capacity with {float(row['battery_reserve_fraction']) * 100.0:.0f}% reserve | -- | -- | {float(row['battery_capacity_required_wh']):.2f} |",
+            "",
+            f"Equivalent 4S LiPo capacity for this conservative sizing case: `{float(row['battery_capacity_required_mah']):.0f} mAh` at `{float(row['battery_pack_voltage_v']):.1f} V` nominal.",
+            "",
+            f"Estimated battery mass at {mission.battery_specific_energy_wh_per_kg:.0f} Wh/kg: `{float(row['battery_mass_required_kg']):.3f} kg`.",
+            "",
+            "## Mission Regime Energy Table",
+            "",
+            *_mission_regime_markdown_lines(row, mission, config),
+            "",
+            f"Required battery for this regime table: `{float(row['mission_profile_capacity_required_mah']):.0f} mAh` at `{float(row['mission_profile_pack_voltage_v']):.1f} V` nominal (`{int(float(row['mission_profile_battery_cell_count']))}S LiPo`), including `{float(row['mission_profile_reserve_fraction']) * 100.0:.0f}%` reserve. Usable energy before reserve is `{float(row['mission_profile_usable_energy_wh']):.2f} Wh`; reserve-adjusted capacity is `{float(row['mission_profile_capacity_required_wh']):.2f} Wh`.",
+            "",
+            "Takeoff is estimated from the payload-on climb condition. Landing is estimated from the post-delivery flaps-down slow/flare condition, which avoids using the saturated steep-approach thrust case as the final landing power.",
+            "",
+            "## Payload-On vs Post-Delivery Performance",
+            "",
+            f"Payload mass is `{float(row['payload_mass_lb']):.2f} lb` (`{float(row['payload_mass_kg']):.3f} kg`). Battery sizing uses the payload-on case for the whole mission, so a canceled delivery can return home without re-sizing the pack.",
+            "",
+            "| Configuration | Mass [kg] | Cruise P/RPM/throttle | Slow P/RPM/throttle | Approach P/RPM/throttle | Climb P/RPM/throttle |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            f"| Payload on | {float(row['payload_on_mass_kg']):.3f} | {float(row['payload_on_cruise_power_w']):.1f} W / {float(row['payload_on_cruise_rpm']):.0f} rpm / {float(row['payload_on_cruise_throttle_percent']):.1f}% | {float(row['payload_on_slow_power_w']):.1f} W / {float(row['payload_on_slow_rpm']):.0f} rpm / {float(row['payload_on_slow_throttle_percent']):.1f}% | {float(row['payload_on_approach_power_w']):.1f} W / {float(row['payload_on_approach_rpm']):.0f} rpm / {float(row['payload_on_approach_throttle_percent']):.1f}% | {float(row['payload_on_climb_power_w']):.1f} W / {float(row['payload_on_climb_rpm']):.0f} rpm / {float(row['payload_on_climb_throttle_percent']):.1f}% |",
+            f"| Post delivery | {float(row['post_delivery_mass_kg']):.3f} | {float(row['post_delivery_cruise_power_w']):.1f} W / {float(row['post_delivery_cruise_rpm']):.0f} rpm / {float(row['post_delivery_cruise_throttle_percent']):.1f}% | {float(row['post_delivery_slow_power_w']):.1f} W / {float(row['post_delivery_slow_rpm']):.0f} rpm / {float(row['post_delivery_slow_throttle_percent']):.1f}% | {float(row['post_delivery_approach_power_w']):.1f} W / {float(row['post_delivery_approach_rpm']):.0f} rpm / {float(row['post_delivery_approach_throttle_percent']):.1f}% | {float(row['post_delivery_climb_power_w']):.1f} W / {float(row['post_delivery_climb_rpm']):.0f} rpm / {float(row['post_delivery_climb_throttle_percent']):.1f}% |",
+            "",
+            "## Main-Wing Stall / Pitch-Up Margin",
+            "",
+            f"Stage 3 assumes a `{float(row['main_wing_pitch_up_stall_margin_factor']):.2f}x` local-CL pitch-up margin for executive review. This means the aircraft should operate at no more than `{100.0 / float(row['main_wing_pitch_up_stall_margin_factor']):.0f}%` of local CLmax in clean pitch-up review conditions.",
+            "",
+            "| Case | Cruise pitch-up margin | Climb pitch-up margin |",
+            "| --- | ---: | ---: |",
+            f"| Payload on | {float(row['payload_on_cruise_pitch_up_stall_margin_percent']):.1f}% | {float(row['payload_on_climb_pitch_up_stall_margin_percent']):.1f}% |",
+            f"| Post delivery | {float(row['post_delivery_cruise_pitch_up_stall_margin_percent']):.1f}% | {float(row['post_delivery_climb_pitch_up_stall_margin_percent']):.1f}% |",
             "",
             "## Reynolds Numbers",
             "",
@@ -2741,31 +4305,43 @@ def write_stage3_readable_results(
             "",
             "Slow-flight drag is now force-balanced against the blown-lift propeller thrust. The natural airframe drag is still reported, but the headline slow-flight total drag includes the added drag required so the propeller can generate the needed slipstream without accelerating the aircraft. This added drag is the first-pass sizing target for future airbrakes or other drag devices.",
             "",
+            "For slow-flight induced drag, Stage 3 now uses the physical split-panel buildup: unblown-panel induced drag plus blown-panel induced drag. The freestream-equivalent finite-wing value is still reported as a diagnostic check, but it is not used in the force balance.",
+            "",
             "## Drag Components",
             "",
             "| Component | Clean cruise [N] | Flaps-down slow flight [N] |",
             "| --- | ---: | ---: |",
-            f"| Main wing profile / Stage 1 flap baseline | {float(row['cruise_wing_profile_drag_n']):.3f} | {float(row['low_speed_stage1_baseline_drag_n']):.3f} |",
-            f"| Main wing induced | {float(row['cruise_wing_induced_drag_n']):.3f} | Included in Stage 1 baseline |",
+            f"| Main wing profile | {float(row['cruise_wing_profile_drag_n']):.3f} | {float(row['low_speed_wing_profile_drag_n']):.3f} |",
+            f"| Main wing induced, used | {float(row['cruise_wing_induced_drag_n']):.3f} | {float(row['low_speed_wing_induced_drag_n']):.3f} |",
             f"| Horizontal tail | {float(row['cruise_htail_drag_n']):.3f} | {float(row['low_speed_htail_drag_n']):.3f} |",
             f"| Vertical tail | {float(row['cruise_vtail_drag_n']):.3f} | {float(row['low_speed_vtail_drag_n']):.3f} |",
             f"| Fuselage | {float(row['cruise_fuselage_drag_n']):.3f} | {float(row['low_speed_fuselage_drag_n']):.3f} |",
             f"| Added drag / airbrakes | 0.000 | {float(row['low_speed_added_drag_required_n']):.3f} |",
             f"| Total | {float(row['cruise_drag_n']):.3f} | {float(row['low_speed_drag_n']):.3f} |",
             "",
+            "| Slow-flight induced-drag diagnostic | Drag [N] |",
+            "| --- | ---: |",
+            f"| Local blown-panel estimate | {float(row['low_speed_wing_induced_local_drag_n']):.3f} |",
+            f"| Freestream-equivalent finite-wing check | {float(row['low_speed_wing_induced_freestream_equiv_drag_n']):.3f} |",
+            f"| Value used in force balance | {float(row['low_speed_wing_induced_drag_n']):.3f} |",
+            "",
             f"Drag-components chart: `{row['drag_components_png']}`",
             "",
             "## Approach Estimate",
             "",
-            "The approach model assumes steady flaps-down descent at the target angle in the YAML file. Weight component along the flight path is allowed to reduce the required thrust, and elevator trim is estimated from the flapped pitching moment plus CG/AC offset.",
+            "The approach model assumes steady flaps-down descent at the target sink rate in the YAML file, clipped by the configured maximum descent rate and by the selected approach airspeed. The climb model checks the configured maximum climb rate in clean configuration.",
             "",
             "| Quantity | Result |",
             "| --- | ---: |",
-            f"| Target approach angle | {float(row['approach_target_angle_deg']):.2f} deg below horizontal |",
+            f"| Target approach sink rate | {float(row['approach_target_sink_rate_fps']):.2f} ft/s |",
+            f"| Actual approach sink rate | {float(row['approach_sink_rate_fps']):.2f} ft/s |",
+            f"| Sink-rate target met? | {bool(float(row['approach_sink_rate_target_met']))} |",
+            f"| Resulting approach angle | {float(row['approach_target_angle_deg']):.2f} deg below horizontal |",
             f"| Approach speed | {float(row['approach_speed_mps']):.2f} m/s |",
             f"| Flap deflection | {float(row['approach_flap_deflection_deg']):.1f} deg |",
             f"| Approach alpha | {float(row['approach_alpha_deg']):.2f} deg |",
             f"| Required CL | {float(row['approach_cl_required']):.3f} |",
+            f"| Required CL / RPM | {float(row['approach_cl_required']):.3f} / {float(row['approach_rpm']):.0f} rpm |",
             f"| Approach drag | {float(row['approach_drag_n']):.3f} N |",
             f"| Required thrust | {float(row['approach_thrust_required_n']):.3f} N |",
             f"| Electrical power | {float(row['approach_power_w']):.2f} W |",
@@ -2774,8 +4350,27 @@ def write_stage3_readable_results(
             f"| Propulsion feasible at this approach angle | {bool(float(row['approach_rpm_feasible']))} |",
             f"| Elevator trim | {float(row['approach_elevator_trim_deg']):.2f} deg |",
             f"| Rudder trim | {float(row['approach_rudder_trim_deg']):.2f} deg |",
-            f"| Sink rate | {float(row['approach_sink_rate_mps']):.3f} m/s |",
+            f"| Max descent rate limit | {float(row['approach_max_descent_rate_fps']):.1f} ft/s |",
+            f"| Sink rate | {float(row['approach_sink_rate_mps']):.3f} m/s ({float(row['approach_sink_rate_fps']):.2f} ft/s) |",
+            f"| Descent rate limited? | {bool(float(row['approach_descent_rate_limited']))} |",
             f"| Glide-ratio equivalent | {float(row['approach_glide_ratio']):.2f}:1 |",
+            "",
+            "## Climb Trim Estimate",
+            "",
+            "| Quantity | Result |",
+            "| --- | ---: |",
+            f"| Target climb rate | {float(row['climb_target_rate_fps']):.1f} ft/s |",
+            f"| Climb speed | {float(row['climb_speed_mps']):.2f} m/s |",
+            f"| Climb angle | {float(row['climb_angle_deg']):.2f} deg |",
+            f"| Required CL | {float(row['climb_cl_required']):.3f} |",
+            f"| Required CL / RPM | {float(row['climb_cl_required']):.3f} / {float(row['climb_rpm']):.0f} rpm |",
+            f"| Climb drag | {float(row['climb_drag_n']):.3f} N |",
+            f"| Required thrust | {float(row['climb_thrust_required_n']):.3f} N |",
+            f"| Electrical power | {float(row['climb_power_w']):.2f} W |",
+            f"| RPM | {float(row['climb_rpm']):.0f} rpm |",
+            f"| Throttle estimate | {float(row['climb_throttle_percent']):.1f}% |",
+            f"| Elevator trim | {float(row['climb_elevator_trim_deg']):.2f} deg |",
+            f"| Propulsion feasible at target climb rate | {bool(float(row['climb_rpm_feasible']))} |",
             "",
             "## Sweep Charts",
             "",
@@ -2849,7 +4444,7 @@ def write_stage3_engineering_tex(
     cruise_drag = _tex_float(row, "cruise_drag_n")
     slow_drag = _tex_float(row, "low_speed_drag_n")
     q_cruise = 0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2
-    q_low = 0.5 * mission.air_density_kgpm3 * mission.low_speed_mps**2
+    q_low = 0.5 * mission.air_density_kgpm3 * _stage3_slow_flight_speed_mps(config)**2
 
     lines = [
         r"\documentclass[11pt]{article}",
@@ -2888,12 +4483,142 @@ def write_stage3_engineering_tex(
             f"\\SI{{{_tex_float(row, 'prop_diameter_in'):.2f}}}{{in}}, the "
             f"{_tex_escape(row['selected_airfoil'])} main airfoil, a horizontal tail span of "
             f"\\SI{{{_tex_float(row, 'htail_span_m'):.3f}}}{{m}}, and a vertical tail height of "
-            f"\\SI{{{_tex_float(row, 'vtail_span_m'):.3f}}}{{m}}. The resulting Stage~3 built "
-            f"mass is \\SI{{{stage3_mass:.3f}}}{{kg}}, with \\SI{{{tail_mass:.3f}}}{{kg}} of added "
+            f"\\SI{{{_tex_float(row, 'vtail_span_m'):.3f}}}{{m}}. The aerodynamics remain tied "
+            f"to the locked gross flight mass of \\SI{{{_tex_float(row, 'gross_flight_mass_kg'):.3f}}}{{kg}}; "
+            f"the current component-estimated mass before ballast or payload is "
+            f"\\SI{{{stage3_mass:.3f}}}{{kg}}, with \\SI{{{tail_mass:.3f}}}{{kg}} of added "
             f"tail foam mass, cruise electrical power of \\SI{{{cruise_power:.1f}}}{{W}}, and "
             f"low-speed electrical power of \\SI{{{slow_power:.1f}}}{{W}}."
         ),
         r"\end{abstract}",
+        "",
+        r"\section{Executive Summary}",
+        (
+            "Tables~\\ref{tab:exec-configuration}, \\ref{tab:exec-performance}, and "
+            "\\ref{tab:exec-margins} summarize the aircraft as it should be reviewed at the "
+            "configuration level. Stage~1/2 selections are listed explicitly because Stage~3 "
+            "treats them as frozen inputs; Stage~3 only refines the fixed-wing tail, trim, "
+            "drag buildup, and reporting around that selected aircraft."
+        ),
+        "",
+        r"\begin{longtable}{@{}p{0.29\linewidth}p{0.30\linewidth}p{0.34\linewidth}@{}}",
+        r"\caption{Executive aircraft configuration summary.}\label{tab:exec-configuration}\\",
+        r"\toprule",
+        r"Item & Current value & Source or design note \\",
+        r"\midrule",
+        r"\endfirsthead",
+        r"\toprule",
+        r"Item & Current value & Source or design note \\",
+        r"\midrule",
+        r"\endhead",
+        rf"Gross flight mass & \SI{{{_tex_float(row, 'gross_flight_mass_kg'):.3f}}}{{kg}} & Locked aircraft mass used for lift, trim, climb, descent, and power calculations. \\",
+        rf"Maximum mass requirement & \SI{{{mission.max_mass_kg:.3f}}}{{kg}} & Stage~1 mission-level requirement. \\",
+        rf"Payload mass & \SI{{{_tex_float(row, 'payload_mass_lb'):.2f}}}{{lb}} / \SI{{{_tex_float(row, 'payload_mass_kg'):.3f}}}{{kg}} & Delivery payload carried before drop-off. \\",
+        rf"Post-delivery flight mass & \SI{{{_tex_float(row, 'post_delivery_mass_kg'):.3f}}}{{kg}} & Used for after-delivery performance reporting only. \\",
+        rf"Stage~1/2 component-estimated mass & \SI{{{_tex_float(row, 'stage1_total_built_mass_kg'):.3f}}}{{kg}} & Frozen upstream propulsion, battery, and baseline system mass estimate. \\",
+        rf"Stage~3 component-estimated mass & \SI{{{_tex_float(row, 'stage3_total_built_mass_kg'):.3f}}}{{kg}} & Stage~1/2 estimate plus the Stage~3 NGX250 foam tail estimate. \\",
+        rf"Remaining mass to gross target & \SI{{{_tex_float(row, 'remaining_mass_to_gross_kg'):.3f}}}{{kg}} & Payload, unmodeled structure, wiring, fasteners, covering, ballast, and contingency. \\",
+        rf"Main airfoil & {_tex_escape(row['selected_airfoil'])} & Frozen Stage~1/2 wing workflow selection. \\",
+        rf"Tail airfoil & {_tex_escape(row['tail_airfoil']).upper()} & Fixed NACA~0008 for both stabilizers. \\",
+        rf"Main wing span, chord, area & \SI{{{_tex_float(row, 'wing_span_m'):.3f}}}{{m}}, \SI{{{_tex_float(row, 'wing_chord_m'):.3f}}}{{m}}, \SI{{{_tex_float(row, 'wing_area_m2'):.3f}}}{{m^2}} & Frozen Stage~1/2 rectangular main wing. \\",
+        rf"Main wing aspect ratio & {_tex_float(row, 'wing_aspect_ratio'):.3f} & Derived from Stage~1/2 wing dimensions. \\",
+        rf"Main wing incidence & \SI{{{_tex_float(row, 'main_wing_incidence_deg'):.3f}}}{{deg}} & Optimized by Stage~3 for cruise body-alpha compatibility. \\",
+        rf"Main wing washout & \SI{{{_tex_float(row, 'main_wing_washout_deg'):.3f}}}{{deg}} & Editable Stage~3 constraint; currently held fixed. \\",
+        rf"Propulsion layout & {int(_tex_float(row, 'n_props'))} \(\times\) \SI{{{_tex_float(row, 'prop_diameter_in'):.2f}}}{{in}}, \(P/D={_tex_float(row, 'prop_pitch_ratio'):.2f}\), {_tex_escape(row['prop_family'])} & Frozen Stage~1/2 motor/propeller selection. \\",
+        rf"Stage~1/2 seed RPM, slow/cruise & \num{{{_tex_float(row, 'seed_low_speed_rpm'):.0f}}} / \num{{{_tex_float(row, 'seed_cruise_rpm'):.0f}}} & Upstream RPMs retained for traceability; Stage~3 recomputes RPM using the active eCalc data. \\",
+        rf"Stage~3 RPM, slow/cruise & \num{{{_tex_float(row, 'low_speed_rpm'):.0f}}} / \num{{{_tex_float(row, 'cruise_rpm'):.0f}}} & Final propeller operating points from the active Stage~3 propulsion model. \\",
+        rf"Power loss factors, wiring/avionics & {_tex_float(row, 'wiring_power_loss_factor'):.3f} / {_tex_float(row, 'avionics_power_loss_factor'):.3f} & Applied after eCalc/generic motor power to include battery harness, connector, distribution, BEC/regulator, and avionics wiring losses. \\",
+        rf"Propeller axial station & \SI{{{_tex_float(row, 'prop_axial_x_m'):.4f}}}{{m}} & Relative to wing leading edge; negative is forward of the leading edge. \\",
+        rf"Fuselage nose and cross-section & \(x_n=\SI{{{_tex_float(row, 'fuselage_nose_x_m'):.3f}}}{{m}}\), \SI{{{_tex_float(row, 'fuselage_width_m') * 1000.0:.0f}}}{{mm}} \(\times\) \SI{{{_tex_float(row, 'fuselage_height_m') * 1000.0:.0f}}}{{mm}} & Nose is 300~mm ahead of the wing leading edge; cross-section from the current packaging assumption. \\",
+        rf"Flap span/chord/deflection & {_tex_float(row, 'flap_span_fraction'):.3f} semispan, {_tex_float(row, 'flap_chord_fraction'):.3f} chord, \SI{{{_tex_float(row, 'flap_deflection_slow_deg'):.1f}}}{{deg}} & Frozen Stage~1/2 slotted-flap sizing. \\",
+        rf"Aileron span/chord & {_tex_float(row, 'aileron_span_fraction'):.3f} semispan, {_tex_float(row, 'aileron_chord_fraction'):.3f} chord & Frozen Stage~1/2 aileron sizing. \\",
+        rf"Horizontal tail span and area & \SI{{{_tex_float(row, 'htail_span_m'):.3f}}}{{m}}, \SI{{{_tex_float(row, 'htail_area_m2'):.3f}}}{{m^2}} & Stage~3 tail-volume and cruise-trim sizing. \\",
+        rf"Horizontal tail root/tip chord & \SI{{{_tex_float(row, 'htail_root_chord_m'):.3f}}}{{m}} / \SI{{{_tex_float(row, 'htail_tip_chord_m'):.3f}}}{{m}} & Includes taper as an optimized/exported dimension. \\",
+        rf"Horizontal tail incidence & \SI{{{_tex_float(row, 'htail_incidence_deg'):.3f}}}{{deg}} & Cruise trim setting. \\",
+        rf"Elevator chord fraction & {_tex_float(row, 'elevator_chord_fraction'):.3f} & Sized for slow-flight pitch authority after stabilizer sizing. \\",
+        rf"Vertical tail height and area & \SI{{{_tex_float(row, 'vtail_span_m'):.3f}}}{{m}}, \SI{{{_tex_float(row, 'vtail_area_m2'):.3f}}}{{m^2}} & Stage~3 directional-stability and control sizing. \\",
+        rf"Vertical tail root/tip chord & \SI{{{_tex_float(row, 'vtail_root_chord_m'):.3f}}}{{m}} / \SI{{{_tex_float(row, 'vtail_tip_chord_m'):.3f}}}{{m}} & Includes taper as an optimized/exported dimension. \\",
+        rf"Vertical tail incidence & \SI{{{_tex_float(row, 'vertical_tail_incidence_deg'):.3f}}}{{deg}} & Fixed yaw/incidence setting. \\",
+        rf"Rudder chord fraction & {_tex_float(row, 'rudder_chord_fraction'):.3f} & Sized for slow-flight yaw authority after stabilizer sizing. \\",
+        rf"Tail arm & \SI{{{_tex_float(row, 'tail_arm_m'):.3f}}}{{m}} & Wing aerodynamic center to tail aerodynamic center. \\",
+        rf"CG location & \SI{{{_tex_float(row, 'cg_x_m'):.4f}}}{{m}} / {_tex_float(row, 'cg_percent_mac'):.2f}\% MAC & Enforced quarter-chord final CG target. \\",
+        r"\bottomrule",
+        r"\end{longtable}",
+        "",
+        r"\begin{longtable}{@{}p{0.25\linewidth}p{0.17\linewidth}p{0.18\linewidth}p{0.18\linewidth}p{0.14\linewidth}@{}}",
+        r"\caption{Executive system-performance summary by flight condition.}\label{tab:exec-performance}\\",
+        r"\toprule",
+        r"Metric & Cruise & Slow flight & Approach/descent & Climb \\",
+        r"\midrule",
+        r"\endfirsthead",
+        r"\toprule",
+        r"Metric & Cruise & Slow flight & Approach/descent & Climb \\",
+        r"\midrule",
+        r"\endhead",
+        rf"Configuration & Clean & Flaps down & Flaps down & Clean \\",
+        rf"Freestream speed & \SI{{{mission.cruise_speed_mps:.2f}}}{{m/s}} & \SI{{{_stage3_slow_flight_speed_mps(config):.2f}}}{{m/s}} & \SI{{{_tex_float(row, 'approach_speed_mps'):.2f}}}{{m/s}} & \SI{{{_tex_float(row, 'climb_speed_mps'):.2f}}}{{m/s}} \\",
+        rf"Vertical rate target & -- & -- & \SI{{{_tex_float(row, 'approach_target_sink_rate_fps'):.2f}}}{{ft/s}} sink & \SI{{{_tex_float(row, 'climb_target_rate_fps'):.2f}}}{{ft/s}} climb \\",
+        rf"Actual vertical rate & -- & -- & \SI{{{_tex_float(row, 'approach_sink_rate_fps'):.2f}}}{{ft/s}} sink & \SI{{{_tex_float(row, 'climb_target_rate_mps') / 0.3048:.2f}}}{{ft/s}} climb \\",
+        rf"Flight-path angle & Level & Level & \SI{{{_tex_float(row, 'approach_target_angle_deg'):.2f}}}{{deg}} down & \SI{{{_tex_float(row, 'climb_angle_deg'):.2f}}}{{deg}} up \\",
+        rf"Free-stream / local \(C_L\) & {_tex_float(row, 'cruise_cl_required'):.3f} / {_tex_float(row, 'cruise_uniform_local_cl_required'):.3f} & {_tex_float(row, 'slow_flight_freestream_cl_required'):.3f} / {_tex_float(row, 'slow_flight_uniform_local_cl_required'):.3f} & {_tex_float(row, 'approach_cl_required'):.3f} / {_tex_float(row, 'approach_uniform_local_cl_required'):.3f} & {_tex_float(row, 'climb_cl_required'):.3f} / {_tex_float(row, 'climb_uniform_local_cl_required'):.3f} \\",
+        rf"Blown wing velocity & \SI{{{_tex_float(row, 'cruise_blown_effective_velocity_mps'):.2f}}}{{m/s}} & \SI{{{_tex_float(row, 'low_speed_actual_veff_mps'):.2f}}}{{m/s}} & \SI{{{_tex_float(row, 'approach_blown_effective_velocity_mps'):.2f}}}{{m/s}} & \SI{{{_tex_float(row, 'climb_blown_effective_velocity_mps'):.2f}}}{{m/s}} \\",
+        rf"Effective dynamic pressure & \SI{{{_tex_float(row, 'cruise_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} & \SI{{{_tex_float(row, 'slow_flight_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} & \SI{{{_tex_float(row, 'approach_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} & \SI{{{_tex_float(row, 'climb_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} \\",
+        rf"Total drag & \SI{{{_tex_float(row, 'cruise_drag_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'low_speed_drag_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'approach_drag_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'climb_drag_n'):.3f}}}{{N}} \\",
+        rf"Required thrust & \SI{{{_tex_float(row, 'cruise_thrust_required_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'low_speed_thrust_required_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'approach_thrust_required_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'climb_thrust_required_n'):.3f}}}{{N}} \\",
+        rf"Throttle estimate & {_tex_float(row, 'cruise_throttle_percent'):.1f}\% & {_tex_float(row, 'low_speed_throttle_percent'):.1f}\% & {_tex_float(row, 'approach_throttle_percent'):.1f}\% & {_tex_float(row, 'climb_throttle_percent'):.1f}\% \\",
+        rf"Motor/prop RPM & \num{{{_tex_float(row, 'cruise_rpm'):.0f}}} & \num{{{_tex_float(row, 'low_speed_rpm'):.0f}}} & \num{{{_tex_float(row, 'approach_rpm'):.0f}}} & \num{{{_tex_float(row, 'climb_rpm'):.0f}}} \\",
+        rf"Electrical power & \SI{{{_tex_float(row, 'cruise_power_w'):.2f}}}{{W}} & \SI{{{_tex_float(row, 'low_speed_power_w'):.2f}}}{{W}} & \SI{{{_tex_float(row, 'approach_power_w'):.2f}}}{{W}} & \SI{{{_tex_float(row, 'climb_power_w'):.2f}}}{{W}} \\",
+        rf"Aircraft electrical losses & \SI{{{_tex_float(row, 'cruise_aircraft_power_losses_w'):.2f}}}{{W}} & \SI{{{_tex_float(row, 'low_speed_aircraft_power_losses_w'):.2f}}}{{W}} & Included in power & Included in power \\",
+        rf"Energy budgeted & \SI{{{_tex_float(row, 'battery_cruise_energy_wh'):.2f}}}{{Wh}} & \SI{{{_tex_float(row, 'battery_slow_energy_wh'):.2f}}}{{Wh}} & Not in pack sizing & Not in pack sizing \\",
+        rf"Trim state & Body \(\alpha\) \SI{{{_tex_float(row, 'cruise_body_alpha_proxy_deg'):.2f}}}{{deg}}; \(i_h\) \SI{{{_tex_float(row, 'htail_incidence_deg'):.2f}}}{{deg}} & \(i_h\) \SI{{{_tex_float(row, 'htail_incidence_deg'):.2f}}}{{deg}}; flaps \SI{{{_tex_float(row, 'flap_deflection_slow_deg'):.0f}}}{{deg}} & Elevator \SI{{{_tex_float(row, 'approach_elevator_trim_deg'):.2f}}}{{deg}}; rudder \SI{{{_tex_float(row, 'approach_rudder_trim_deg'):.2f}}}{{deg}} & Elevator \SI{{{_tex_float(row, 'climb_elevator_trim_deg'):.2f}}}{{deg}} \\",
+        r"\bottomrule",
+        r"\end{longtable}",
+        "",
+        r"\begin{longtable}{@{}p{0.18\linewidth}p{0.12\linewidth}p{0.18\linewidth}p{0.18\linewidth}p{0.18\linewidth}p{0.12\linewidth}@{}}",
+        r"\caption{Payload-on and post-delivery performance comparison. Battery capacity is sized from the payload-on case.}\label{tab:exec-payload-performance}\\",
+        r"\toprule",
+        r"Case & Mass & Cruise power/RPM/throttle & Slow power/RPM/throttle & Climb power/RPM/throttle & Cruise/Climb pitch margin \\",
+        r"\midrule",
+        r"\endfirsthead",
+        r"\toprule",
+        r"Case & Mass & Cruise power/RPM/throttle & Slow power/RPM/throttle & Climb power/RPM/throttle & Cruise/Climb pitch margin \\",
+        r"\midrule",
+        r"\endhead",
+        rf"Payload on & \SI{{{_tex_float(row, 'payload_on_mass_kg'):.3f}}}{{kg}} & \SI{{{_tex_float(row, 'payload_on_cruise_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'payload_on_cruise_rpm'):.0f}}} / {_tex_float(row, 'payload_on_cruise_throttle_percent'):.1f}\% & \SI{{{_tex_float(row, 'payload_on_slow_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'payload_on_slow_rpm'):.0f}}} / {_tex_float(row, 'payload_on_slow_throttle_percent'):.1f}\% & \SI{{{_tex_float(row, 'payload_on_climb_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'payload_on_climb_rpm'):.0f}}} / {_tex_float(row, 'payload_on_climb_throttle_percent'):.1f}\% & {_tex_float(row, 'payload_on_cruise_pitch_up_stall_margin_percent'):.0f}\% / {_tex_float(row, 'payload_on_climb_pitch_up_stall_margin_percent'):.0f}\% \\",
+        rf"Post delivery & \SI{{{_tex_float(row, 'post_delivery_mass_kg'):.3f}}}{{kg}} & \SI{{{_tex_float(row, 'post_delivery_cruise_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'post_delivery_cruise_rpm'):.0f}}} / {_tex_float(row, 'post_delivery_cruise_throttle_percent'):.1f}\% & \SI{{{_tex_float(row, 'post_delivery_slow_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'post_delivery_slow_rpm'):.0f}}} / {_tex_float(row, 'post_delivery_slow_throttle_percent'):.1f}\% & \SI{{{_tex_float(row, 'post_delivery_climb_power_w'):.1f}}}{{W}} / \num{{{_tex_float(row, 'post_delivery_climb_rpm'):.0f}}} / {_tex_float(row, 'post_delivery_climb_throttle_percent'):.1f}\% & {_tex_float(row, 'post_delivery_cruise_pitch_up_stall_margin_percent'):.0f}\% / {_tex_float(row, 'post_delivery_climb_pitch_up_stall_margin_percent'):.0f}\% \\",
+        r"\bottomrule",
+        r"\end{longtable}",
+        "",
+        r"\begin{longtable}{@{}p{0.31\linewidth}p{0.26\linewidth}p{0.35\linewidth}@{}}",
+        r"\caption{Executive margins and PDR review notes.}\label{tab:exec-margins}\\",
+        r"\toprule",
+        r"Review item & Current value & Note \\",
+        r"\midrule",
+        r"\endfirsthead",
+        r"\toprule",
+        r"Review item & Current value & Note \\",
+        r"\midrule",
+        r"\endhead",
+        rf"Static margin & {_tex_float(row, 'static_margin_mac'):.3f} MAC & Required range {config.min_static_margin_mac:.3f}--{config.max_static_margin_mac:.3f} MAC; target {config.target_static_margin_mac:.3f} MAC. \\",
+        rf"CG error from quarter chord & \SI{{{_tex_float(row, 'cg_error_m'):.6f}}}{{m}} & Positive means aft of target; current target is {_tex_float(row, 'cg_target_percent_mac'):.2f}\% MAC. \\",
+        rf"Horizontal tail volume & {_tex_float(row, 'horizontal_tail_volume'):.3f} & Constraint range {_tex_float(row, 'horizontal_tail_volume_min'):.3f}--{_tex_float(row, 'horizontal_tail_volume_max'):.3f}. \\",
+        rf"Vertical tail volume & {_tex_float(row, 'vertical_tail_volume'):.3f} & Constraint range {_tex_float(row, 'vertical_tail_volume_min'):.3f}--{_tex_float(row, 'vertical_tail_volume_max'):.3f}. \\",
+        rf"Slow-flight lift margin & {_tex_float(row, 'slow_flight_lift_margin_percent'):.1f}\% & Margin after the {_tex_float(row, 'slow_flight_stall_margin_factor'):.2f} stall-margin factor is applied. \\",
+        rf"Slow blown-panel local \(C_L\) margin & {_tex_float(row, 'slow_flight_local_cl_margin'):.3f} & Positive means the blown panel is below its design local \(C_{{L,\max}}\). \\",
+        rf"Slow required blown-velocity margin & \SI{{{_tex_float(row, 'slow_flight_required_veff_margin_mps'):.3f}}}{{m/s}} & Actual minus required slipstream velocity at the slow-flight sizing point. \\",
+        rf"Main-wing pitch-up stall margin rule & {_tex_float(row, 'main_wing_pitch_up_stall_margin_factor'):.2f}x & Review assumption: operate at no more than \(1/{_tex_float(row, 'main_wing_pitch_up_stall_margin_factor'):.2f}\) of local \(C_{{L,\max}}\) for clean emergency pitch-up margin. \\",
+        rf"Payload-on clean pitch margins & {_tex_float(row, 'payload_on_cruise_pitch_up_stall_margin_percent'):.1f}\% cruise / {_tex_float(row, 'payload_on_climb_pitch_up_stall_margin_percent'):.1f}\% climb & Positive margin indicates available local \(C_L\) headroom beyond the review rule. \\",
+        rf"Post-delivery clean pitch margins & {_tex_float(row, 'post_delivery_cruise_pitch_up_stall_margin_percent'):.1f}\% cruise / {_tex_float(row, 'post_delivery_climb_pitch_up_stall_margin_percent'):.1f}\% climb & Lower weight increases clean-wing pitch-up headroom. \\",
+        rf"Added drag target for slow flight & \SI{{{_tex_float(row, 'low_speed_added_drag_required_n'):.3f}}}{{N}} & First-pass airbrake/spoiler drag requirement so blown-lift thrust does not accelerate the aircraft. \\",
+        rf"Pitch control margin & {_tex_float(row, 'slow_pitch_control_margin_percent'):.1f}\% & Elevator authority margin at slow flight. \\",
+        rf"Yaw control margin & {_tex_float(row, 'slow_yaw_control_margin_percent'):.1f}\% & Rudder authority margin at slow flight. \\",
+        rf"Approach RPM feasible flag & {int(_tex_float(row, 'approach_rpm_feasible'))} & 1 means the requested thrust is inside the active RPM bracket. \\",
+        rf"Climb RPM feasible flag & {int(_tex_float(row, 'climb_rpm_feasible'))} & 1 means the requested thrust is inside the active RPM bracket. \\",
+        rf"Battery capacity requirement & \SI{{{_tex_float(row, 'battery_capacity_required_wh'):.2f}}}{{Wh}} / \num{{{_tex_float(row, 'battery_capacity_required_mah'):.0f}}}~mAh & 4S LiPo equivalent including {_tex_float(row, 'battery_reserve_fraction') * 100.0:.0f}\% reserve for \SI{{{_tex_float(row, 'battery_cruise_segment_min'):.1f}}}{{min}} cruise plus \SI{{{_tex_float(row, 'battery_slow_segment_min'):.1f}}}{{min}} slow flight. \\",
+        rf"Battery mass estimate & \SI{{{_tex_float(row, 'battery_mass_required_kg'):.3f}}}{{kg}} & Uses Stage~1 pack specific energy of \SI{{{mission.battery_specific_energy_wh_per_kg:.0f}}}{{Wh/kg}}. \\",
+        rf"Design warnings & \texttt{{{_tex_escape(warnings)}}} & Generated warning flags from the Stage~3 result row. \\",
+        r"\bottomrule",
+        r"\end{longtable}",
         "",
         r"\section*{Nomenclature}",
         r"\begin{longtable}{@{}ll@{}}",
@@ -2939,8 +4664,10 @@ def write_stage3_engineering_tex(
         rf"Tail airfoil & Stage 3 config & {_tex_escape(row['tail_airfoil'])} \\",
         rf"Propeller layout & Stage 1/2 fixed & {int(_tex_float(row, 'n_props'))} \(\times\) \SI{{{_tex_float(row, 'prop_diameter_in'):.2f}}}{{in}}, \(P/D={_tex_float(row, 'prop_pitch_ratio'):.2f}\) \\",
         rf"Propulsion model & Stage 3/eCalc & {_tex_escape(row['propulsion_model_source'])} \\",
+        rf"Power loss factors & Stage 3 config & wiring {_tex_float(row, 'wiring_power_loss_factor'):.3f}; avionics {_tex_float(row, 'avionics_power_loss_factor'):.3f} \\",
         rf"Fuselage nose station & Stage 3 config & \SI{{{_tex_float(row, 'fuselage_nose_x_m'):.3f}}}{{m}} from wing leading edge \\",
-        rf"Low-speed condition & mission config & \SI{{{mission.low_speed_mps:.2f}}}{{m/s}} \\",
+        rf"Stage 3 slow-flight condition & Stage 3 config & \SI{{{_stage3_slow_flight_speed_mps(config):.2f}}}{{m/s}} \\",
+        rf"Upstream Stage 1/2 low-speed condition & mission config & \SI{{{mission.low_speed_mps:.2f}}}{{m/s}} \\",
         rf"Cruise condition & mission config & \SI{{{mission.cruise_speed_mps:.2f}}}{{m/s}} \\",
         rf"Fuselage cross-section & Stage 3 config & \SI{{{_tex_float(row, 'fuselage_width_m') * 1000.0:.0f}}}{{mm}} \(\times\) \SI{{{_tex_float(row, 'fuselage_height_m') * 1000.0:.0f}}}{{mm}} \\",
         rf"NGX250 foam density & material input & \SI{{{config.foam_density_kgpm3:.1f}}}{{kg/m^3}} \\",
@@ -2992,6 +4719,12 @@ def write_stage3_engineering_tex(
             r"\item If enabled in the YAML constraints and the frozen propulsion layout matches, "
             r"it reads the eCalc static thrust/power table and dynamic design-point \(C_T/C_P\) "
             r"CSV files to replace the generic propeller surrogate used in early screening."
+        ),
+        (
+            r"\item After the propulsion model returns motor/ESC electric power, Stage~3 applies "
+            r"the editable wiring and avionics loss factors from the YAML file. The reported "
+            r"condition powers and battery-capacity estimate therefore include harness, connector, "
+            r"distribution, BEC/regulator, and avionics wiring allowances."
         ),
         (
             r"\item It optimizes only the tail planform and tail arm. The main wing, propeller "
@@ -3121,33 +4854,50 @@ def write_stage3_engineering_tex(
         r"\subsection{Slow-flight high-lift treatment}",
         (
             "Slow flight is always evaluated with slotted flaps deployed. Stage~3 no longer invents "
-            r"a new \(C_{L,\max}\) value for this mode; instead, it reads the selected Stage~1/2 "
-            "control-surface outputs and applies a design margin. The loaded sources are"
+            r"a large physical \(C_{L,\max}\) for this mode. It reads the selected Stage~1/2 "
+            r"equivalent high-lift outputs for traceability, and it reads the Stage~1/2 "
+            r"NeuralFoil flap-sweep section polars for the physical local clean and flapped "
+            r"\(C_{L,\max}\) limits. The YAML CLmax values are only missing-file fallbacks. "
+            "Propwash increases local dynamic pressure rather than airfoil CLmax. The loaded sources are"
         ),
         r"\begin{itemize}[leftmargin=*]",
         rf"\item \texttt{{{_tex_escape(row['clmax_source'])}}}",
         rf"\item \texttt{{{_tex_escape(row['clmax_curve_source'])}}}",
+        rf"\item \texttt{{{_tex_escape(row['physical_clmax_source'])}}}",
         r"\end{itemize}",
+        (
+            rf"The Stage~1/2 section-polar values are \(C_{{L,\max,clean}}\)="
+            rf"{_tex_float(row, 'stage12_clean_section_clmax_unblown'):.3f}/"
+            rf"{_tex_float(row, 'stage12_clean_section_clmax_blown'):.3f} "
+            rf"(unblown/blown) and \(C_{{L,\max,flap}}\)="
+            rf"{_tex_float(row, 'stage12_flapped_section_clmax_unblown'):.3f}/"
+            rf"{_tex_float(row, 'stage12_flapped_section_clmax_blown'):.3f}. "
+            rf"The area-weighted physical blown-panel limit used by Stage~3 is "
+            rf"{_tex_float(row, 'stage12_weighted_blown_physical_clmax'):.3f}."
+        ),
         r"\begin{table}[H]",
         r"\centering",
         r"\begin{tabular}{lcc}",
         r"\toprule",
-        r"Condition & \(C_{L,\max}\) & Peak \(\alpha\) \\",
+        r"Condition & Raw equivalent \(C_L\) & Physical cap used \\",
         r"\midrule",
-        rf"No flap & {_tex_float(row, 'no_flap_clmax'):.3f} & \SI{{{_tex_float(row, 'no_flap_clmax_alpha_deg'):.2f}}}{{deg}} \\",
-        rf"Flap only & {_tex_float(row, 'flap_only_clmax'):.3f} & \SI{{{_tex_float(row, 'flap_only_clmax_alpha_deg'):.2f}}}{{deg}} \\",
-        rf"Clean blown & {_tex_float(row, 'clean_blowing_clmax'):.3f} & \SI{{{_tex_float(row, 'clean_blowing_clmax_alpha_deg'):.2f}}}{{deg}} \\",
-        rf"Flap-down blown & {_tex_float(row, 'flap_down_blown_clmax'):.3f} & \SI{{{_tex_float(row, 'flap_down_blown_clmax_alpha_deg'):.2f}}}{{deg}} \\",
+        rf"No flap & {_tex_float(row, 'raw_no_flap_clmax'):.3f} & {_tex_float(row, 'no_flap_clmax'):.3f} \\",
+        rf"Flap only & {_tex_float(row, 'raw_flap_only_clmax'):.3f} & {_tex_float(row, 'flap_only_clmax'):.3f} \\",
+        rf"Clean blown & {_tex_float(row, 'raw_clean_blowing_clmax'):.3f} & {_tex_float(row, 'clean_blowing_clmax'):.3f} \\",
+        rf"Flap-down blown & {_tex_float(row, 'raw_flap_down_blown_clmax'):.3f} & {_tex_float(row, 'flap_down_blown_clmax'):.3f} \\",
         r"\bottomrule",
         r"\end{tabular}",
-        r"\caption{Stage~1/2 high-lift coefficients consumed directly by Stage~3.}",
+        r"\caption{Raw Stage~1/2 equivalent high-lift coefficients and the physical local CLmax caps used by Stage~3.}",
         r"\label{tab:stage3-clmax}",
         r"\end{table}",
         (
             f"The slow-flight sizing coefficients are divided by the stall margin factor "
             f"{config.slow_flight_stall_margin_factor:.2f}. Thus the design flap-only coefficient is "
-            f"{_tex_float(row, 'slow_flight_design_unblown_clmax'):.3f}, and the design flap-down "
-            f"blown coefficient is {_tex_float(row, 'slow_flight_design_blown_clmax'):.3f}."
+            f"{_tex_float(row, 'slow_flight_design_unblown_clmax'):.3f}. The local physical "
+            f"blown-panel design coefficient is {_tex_float(row, 'slow_flight_design_blown_local_clmax'):.3f}, "
+            f"while the freestream-referenced blown equivalent design coefficient is "
+            f"{_tex_float(row, 'slow_flight_design_blown_clmax'):.3f}. The current slow-flight "
+            f"blown-panel local CL is {_tex_float(row, 'slow_flight_blown_local_cl'):.3f}."
         ),
         "",
         r"\subsection{Slow-flight force balance and added drag}",
@@ -3175,21 +4925,17 @@ def write_stage3_engineering_tex(
         r"\subsection{Performance sweeps}",
         (
             "The drag and power sweep figure is not part of the optimizer objective; it is a "
-            "diagnostic output for the final ranked design. Velocity sweeps solve the angle of "
-            "attack needed to support aircraft weight at each speed, then evaluate profile drag, "
-            "induced drag, tail drag, fuselage drag, and propeller power. Angle-of-attack sweeps "
-            "hold speed fixed and vary incidence. Both the clean cruise and flaps-down slow-flight "
-            "configurations are plotted."
+            "diagnostic output for the final ranked design. The clean velocity sweep solves the "
+            "angle of attack needed to support aircraft weight and omits points outside the clean "
+            "polar lift range. The flaps-down sweeps use the same split blown/unblown component "
+            "model as the Stage~3 slow-flight sizing calculation, with profile drag, induced drag, "
+            "tail drag, fuselage drag, and propeller power evaluated from that model."
         ),
         (
-            "The sweep power curves are drag-balance curves: they answer how much electrical "
-            "power would be required if the propellers had to overcome the plotted section-polar "
-            "drag at each sampled speed or angle of attack. This is not the same number as the "
-            "headline slow-flight blown-lift power, which is the propeller power required to "
-            "generate the needed slipstream velocity at the design slow-flight point. Large "
-            "flaps-down sweep powers therefore indicate that the diagnostic flapped drag polar is "
-            "much more draggy than the Stage~1/2 low-speed baseline used for the actual blown-lift "
-            "operating point."
+            "The power curves no longer plot saturated max-RPM points as valid requirements. "
+            "If the requested trim, drag balance, or blown-lift slipstream condition cannot be "
+            "met within the configured RPM range, the point is left blank in the plot and marked "
+            "with zero feasibility in the sweep CSV."
         ),
         "",
         r"\section{Assumption Justification}",
@@ -3216,7 +4962,10 @@ def write_stage3_engineering_tex(
         rf"Minimum slow-lift warning margin & {config.min_slow_flight_lift_margin:.2f} & Adds a warning if less than 10\% lift margin remains after the stall margin has already been applied. \\",
         rf"Elevator/rudder max deflection & \SI{{{config.elevator_max_deflection_deg:.0f}}}{{deg}} / \SI{{{config.rudder_max_deflection_deg:.0f}}}{{deg}} & Avoids assuming extreme deflections where hinge moments, separation, and servo loads become questionable. \\",
         rf"Control effectiveness exponent & {config.control_surface_effectiveness_exponent:.2f} & Represents diminishing returns as control-surface chord fraction grows; authority is not assumed to scale linearly forever. \\",
-        rf"Approach target & \SI{{{config.approach_target_angle_deg:.1f}}}{{deg}}, \SI{{{config.approach_speed_mps:.1f}}}{{m/s}} & Editable first-pass descent condition. The report flags saturation when the selected propeller/RPM limits cannot meet it. \\",
+        rf"Wiring power loss factor & {config.wiring_power_loss_factor:.3f} & Multiplies propulsion electric power after the eCalc/generic motor model to cover battery harness, connector, and distribution losses that are not part of the aerodynamic thrust requirement. \\",
+        rf"Avionics power loss factor & {config.avionics_power_loss_factor:.3f} & Multiplies the fixed avionics load to include BEC/regulator inefficiency and wiring loss in the avionics bus. \\",
+        rf"Approach target & \SI{{{config.approach_target_sink_rate_fps:.1f}}}{{ft/s}}, \SI{{{config.approach_speed_mps:.1f}}}{{m/s}} & Editable first-pass descent condition. If the target sink rate exceeds what the selected approach speed can physically provide, Stage~3 clips it and reports that the target was not met. \\",
+        rf"Battery sizing segments & \SI{{{config.battery_cruise_segment_min:.1f}}}{{min}} cruise, \SI{{{config.battery_slow_segment_min:.1f}}}{{min}} slow & Converts the final Stage~3 operating powers into a pack-capacity requirement. The reserve fraction and specific energy are inherited from the Stage~1 mission assumptions so the battery estimate remains tied to the same aircraft-level mass model. \\",
         r"\bottomrule",
         r"\end{longtable}",
         "",
@@ -3230,6 +4979,8 @@ def write_stage3_engineering_tex(
         rf"Main wing span & \(b\) & \SI{{{_tex_float(row, 'wing_span_m'):.3f}}}{{m}} \\",
         rf"Main wing chord & \(c\) & \SI{{{_tex_float(row, 'wing_chord_m'):.3f}}}{{m}} \\",
         rf"Main wing incidence & \(i_w\) & \SI{{{_tex_float(row, 'main_wing_incidence_deg'):.3f}}}{{deg}} \\",
+        rf"Cruise body alpha proxy & \(\alpha_b\) & \SI{{{_tex_float(row, 'cruise_body_alpha_proxy_deg'):.3f}}}{{deg}} \\",
+        rf"Cruise section alpha proxy & \(\alpha_\mathrm{{sec}}\) & \SI{{{_tex_float(row, 'cruise_section_alpha_proxy_deg'):.3f}}}{{deg}} \\",
         rf"Propeller axial position & \(x_p\) & \SI{{{_tex_float(row, 'prop_axial_x_m'):.4f}}}{{m}} \\",
         rf"Fuselage nose station & \(x_n\) & \SI{{{_tex_float(row, 'fuselage_nose_x_m'):.4f}}}{{m}} \\",
         rf"Horizontal tail span & \(b_h\) & \SI{{{_tex_float(row, 'htail_span_m'):.3f}}}{{m}} \\",
@@ -3283,7 +5034,9 @@ def write_stage3_engineering_tex(
         rf"Horizontal tail foam mass & \SI{{{_tex_float(row, 'htail_foam_mass_kg'):.3f}}}{{kg}} & NGX250, geometry-derived \\",
         rf"Vertical tail foam mass & \SI{{{_tex_float(row, 'vtail_foam_mass_kg'):.3f}}}{{kg}} & NGX250, geometry-derived \\",
         rf"Total tail foam mass & \SI{{{tail_mass:.3f}}}{{kg}} & added during sizing \\",
-        rf"Stage~3 built mass & \SI{{{stage3_mass:.3f}}}{{kg}} & baseline plus tail foam \\",
+        rf"Gross flight mass used in aerodynamics & \SI{{{_tex_float(row, 'gross_flight_mass_kg'):.3f}}}{{kg}} & locked Stage~1/2 flight mass \\",
+        rf"Component-estimated mass before ballast/payload & \SI{{{stage3_mass:.3f}}}{{kg}} & baseline plus tail foam \\",
+        rf"Remaining mass to gross target & \SI{{{_tex_float(row, 'remaining_mass_to_gross_kg'):.3f}}}{{kg}} & payload, unmodeled structure, wiring, fasteners, ballast, contingency \\",
         rf"Mass margin & \SI{{{_tex_float(row, 'mass_budget_margin_kg'):.3f}}}{{kg}} & relative to \SI{{{mission.max_mass_kg:.1f}}}{{kg}} limit \\",
         rf"CG location & \SI{{{_tex_float(row, 'cg_x_m'):.3f}}}{{m}} & from wing leading edge \\",
         rf"CG fraction MAC & {_tex_float(row, 'cg_percent_mac'):.2f}\% & based on rectangular MAC \\",
@@ -3321,13 +5074,22 @@ def write_stage3_engineering_tex(
         r"\toprule",
         r"Metric & Low speed & Cruise \\",
         r"\midrule",
-        rf"Freestream speed & \SI{{{mission.low_speed_mps:.2f}}}{{m/s}} & \SI{{{mission.cruise_speed_mps:.2f}}}{{m/s}} \\",
+        rf"Freestream speed & \SI{{{_stage3_slow_flight_speed_mps(config):.2f}}}{{m/s}} & \SI{{{mission.cruise_speed_mps:.2f}}}{{m/s}} \\",
         rf"Total drag & \SI{{{slow_drag:.3f}}}{{N}} & \SI{{{cruise_drag:.3f}}}{{N}} \\",
         rf"Natural airframe drag & \SI{{{_tex_float(row, 'low_speed_natural_drag_n'):.3f}}}{{N}} & -- \\",
+        rf"Slow wing induced, used & \SI{{{_tex_float(row, 'low_speed_wing_induced_drag_n'):.3f}}}{{N}} & -- \\",
+        rf"Slow wing induced, local blown-panel & \SI{{{_tex_float(row, 'low_speed_wing_induced_local_drag_n'):.3f}}}{{N}} & -- \\",
+        rf"Slow wing induced, freestream-equivalent & \SI{{{_tex_float(row, 'low_speed_wing_induced_freestream_equiv_drag_n'):.3f}}}{{N}} & -- \\",
         rf"Added drag required & \SI{{{_tex_float(row, 'low_speed_added_drag_required_n'):.3f}}}{{N}} & -- \\",
         rf"Slow drag minus cruise drag & \SI{{{_tex_float(row, 'low_speed_drag_delta_vs_cruise_n'):.3f}}}{{N}} & -- \\",
         rf"Fuselage drag increment & \SI{{{_tex_float(row, 'low_speed_fuselage_drag_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'cruise_fuselage_drag_n'):.3f}}}{{N}} \\",
         rf"Electrical power & \SI{{{slow_power:.2f}}}{{W}} & \SI{{{cruise_power:.2f}}}{{W}} \\",
+        rf"Freestream-reference \(C_L\) & {_tex_float(row, 'slow_flight_freestream_cl_required'):.3f} & {_tex_float(row, 'cruise_cl_required'):.3f} \\",
+        rf"Pressure-weighted local \(C_L\) & {_tex_float(row, 'slow_flight_uniform_local_cl_required'):.3f} & {_tex_float(row, 'cruise_uniform_local_cl_required'):.3f} \\",
+        rf"Unblown/blown dynamic pressure & \SI{{{_tex_float(row, 'slow_flight_unblown_dynamic_pressure_pa'):.1f}}}{{Pa}} / \SI{{{_tex_float(row, 'slow_flight_blown_dynamic_pressure_pa'):.1f}}}{{Pa}} & \SI{{{_tex_float(row, 'cruise_unblown_dynamic_pressure_pa'):.1f}}}{{Pa}} / \SI{{{_tex_float(row, 'cruise_blown_dynamic_pressure_pa'):.1f}}}{{Pa}} \\",
+        rf"Effective dynamic pressure & \SI{{{_tex_float(row, 'slow_flight_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} & \SI{{{_tex_float(row, 'cruise_effective_dynamic_pressure_pa'):.1f}}}{{Pa}} \\",
+        rf"Required thrust & \SI{{{_tex_float(row, 'low_speed_thrust_required_n'):.3f}}}{{N}} & \SI{{{_tex_float(row, 'cruise_thrust_required_n'):.3f}}}{{N}} \\",
+        rf"Throttle estimate & {_tex_float(row, 'low_speed_throttle_percent'):.1f}\% & {_tex_float(row, 'cruise_throttle_percent'):.1f}\% \\",
         rf"RPM & \num{{{_tex_float(row, 'low_speed_rpm'):.0f}}} & \num{{{_tex_float(row, 'cruise_rpm'):.0f}}} \\",
         rf"\(C_T/C_P\) & {_tex_float(row, 'low_speed_ct'):.4f} / {_tex_float(row, 'low_speed_cp'):.4f} & {_tex_float(row, 'cruise_ct'):.4f} / {_tex_float(row, 'cruise_cp'):.4f} \\",
         rf"Required/actual blown velocity & \SI{{{_tex_float(row, 'low_speed_required_veff_mps'):.3f}}}{{m/s}} / \SI{{{_tex_float(row, 'low_speed_actual_veff_mps'):.3f}}}{{m/s}} & -- \\",
@@ -3337,6 +5099,77 @@ def write_stage3_engineering_tex(
         r"\caption{Low-speed and cruise performance after Stage~3 tail sizing.}",
         r"\label{tab:stage3-performance}",
         r"\end{table}",
+        "",
+        r"\begin{table}[H]",
+        r"\centering",
+        r"\small",
+        r"\begin{tabular}{lrrrrrrr}",
+        r"\toprule",
+        r"Condition & Speed [m/s] & RPM & Thrust [N] & Throttle [\%] & \(C_L\) free/local & Drag [N] & Power [W] \\",
+        r"\midrule",
+        rf"Clean cruise & {mission.cruise_speed_mps:.2f} & \num{{{_tex_float(row, 'cruise_rpm'):.0f}}} & {_tex_float(row, 'cruise_thrust_required_n'):.3f} & {_tex_float(row, 'cruise_throttle_percent'):.1f} & {_tex_float(row, 'cruise_cl_required'):.3f} / {_tex_float(row, 'cruise_uniform_local_cl_required'):.3f} & {_tex_float(row, 'cruise_drag_n'):.3f} & {_tex_float(row, 'cruise_power_w'):.2f} \\",
+        rf"Flaps-down slow flight & {_stage3_slow_flight_speed_mps(config):.2f} & \num{{{_tex_float(row, 'low_speed_rpm'):.0f}}} & {_tex_float(row, 'low_speed_thrust_required_n'):.3f} & {_tex_float(row, 'low_speed_throttle_percent'):.1f} & {_tex_float(row, 'slow_flight_freestream_cl_required'):.3f} / {_tex_float(row, 'slow_flight_uniform_local_cl_required'):.3f} & {_tex_float(row, 'low_speed_drag_n'):.3f} & {_tex_float(row, 'low_speed_power_w'):.2f} \\",
+        rf"Flaps-down approach/descent & {_tex_float(row, 'approach_speed_mps'):.2f} & \num{{{_tex_float(row, 'approach_rpm'):.0f}}} & {_tex_float(row, 'approach_thrust_required_n'):.3f} & {_tex_float(row, 'approach_throttle_percent'):.1f} & {_tex_float(row, 'approach_cl_required'):.3f} / {_tex_float(row, 'approach_uniform_local_cl_required'):.3f} & {_tex_float(row, 'approach_drag_n'):.3f} & {_tex_float(row, 'approach_power_w'):.2f} \\",
+        rf"Clean climb & {_tex_float(row, 'climb_speed_mps'):.2f} & \num{{{_tex_float(row, 'climb_rpm'):.0f}}} & {_tex_float(row, 'climb_thrust_required_n'):.3f} & {_tex_float(row, 'climb_throttle_percent'):.1f} & {_tex_float(row, 'climb_cl_required'):.3f} / {_tex_float(row, 'climb_uniform_local_cl_required'):.3f} & {_tex_float(row, 'climb_drag_n'):.3f} & {_tex_float(row, 'climb_power_w'):.2f} \\",
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{Flight-condition operating values. The free-stream \(C_L\) uses only \(q_\infty\); the local/effective \(C_L\) includes the pressure-weighted blown and unblown wing sections where that model is available.}",
+        r"\label{tab:stage3-cl-rpm}",
+        r"\end{table}",
+        "",
+        r"\begin{table}[H]",
+        r"\centering",
+        r"\begin{tabular}{lrrrr}",
+        r"\toprule",
+        r"Condition & Blown velocity [m/s] & \(q_\infty\) [Pa] & \(q_\mathrm{blown}\) [Pa] & \(q_\mathrm{eff}\) [Pa] \\",
+        r"\midrule",
+        rf"Clean cruise & {_tex_float(row, 'cruise_blown_effective_velocity_mps'):.3f} & {_tex_float(row, 'cruise_unblown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'cruise_blown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'cruise_effective_dynamic_pressure_pa'):.1f} \\",
+        rf"Flaps-down slow flight & {_tex_float(row, 'low_speed_actual_veff_mps'):.3f} & {_tex_float(row, 'slow_flight_unblown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'slow_flight_blown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'slow_flight_effective_dynamic_pressure_pa'):.1f} \\",
+        rf"Flaps-down approach/descent & {_tex_float(row, 'approach_blown_effective_velocity_mps'):.3f} & {_tex_float(row, 'approach_unblown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'approach_blown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'approach_effective_dynamic_pressure_pa'):.1f} \\",
+        rf"Clean climb & {_tex_float(row, 'climb_blown_effective_velocity_mps'):.3f} & {_tex_float(row, 'climb_unblown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'climb_blown_dynamic_pressure_pa'):.1f} & {_tex_float(row, 'climb_effective_dynamic_pressure_pa'):.1f} \\",
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{Propwash dynamic-pressure diagnostics used to translate free-stream lift demand into local wing-section lift demand.}",
+        r"\label{tab:stage3-propwash-q}",
+        r"\end{table}",
+        "",
+        r"\begin{table}[H]",
+        r"\centering",
+        r"\begin{tabular}{lrrr}",
+        r"\toprule",
+        r"Segment & Duration [min] & Power [W] & Energy [Wh] \\",
+        r"\midrule",
+        rf"Cruise & {_tex_float(row, 'battery_cruise_segment_min'):.1f} & {_tex_float(row, 'cruise_power_w'):.2f} & {_tex_float(row, 'battery_cruise_energy_wh'):.2f} \\",
+        rf"Slow flight & {_tex_float(row, 'battery_slow_segment_min'):.1f} & {_tex_float(row, 'low_speed_power_w'):.2f} & {_tex_float(row, 'battery_slow_energy_wh'):.2f} \\",
+        rf"Usable subtotal & {_tex_float(row, 'battery_cruise_segment_min') + _tex_float(row, 'battery_slow_segment_min'):.1f} & -- & {_tex_float(row, 'battery_usable_energy_wh'):.2f} \\",
+        rf"Pack capacity with {_tex_float(row, 'battery_reserve_fraction') * 100.0:.0f}\% reserve & -- & -- & {_tex_float(row, 'battery_capacity_required_wh'):.2f} \\",
+        rf"Equivalent 4S LiPo capacity & -- & -- & {_tex_float(row, 'battery_capacity_required_mah'):.0f} mAh at \SI{{{_tex_float(row, 'battery_pack_voltage_v'):.1f}}}{{V}} \\",
+        r"\bottomrule",
+        r"\end{tabular}",
+        rf"\caption{{Battery capacity estimate for \SI{{{_tex_float(row, 'battery_cruise_segment_min'):.1f}}}{{min}} of cruise and \SI{{{_tex_float(row, 'battery_slow_segment_min'):.1f}}}{{min}} of slow flight. At \SI{{{mission.battery_specific_energy_wh_per_kg:.0f}}}{{Wh/kg}}, the reserve-adjusted pack mass estimate is \SI{{{_tex_float(row, 'battery_mass_required_kg'):.3f}}}{{kg}}.}}",
+        r"\label{tab:stage3-battery-capacity}",
+        r"\end{table}",
+        "",
+        r"\begin{table}[H]",
+        r"\centering",
+        r"\begin{tabular}{lrrrrrrr}",
+        r"\toprule",
+        r"Regime & RPM & Time [min] & Total P [W] & Total I [A] & Energy [Wh] & Used [mAh] & \% of sized 4S pack \\",
+        r"\midrule",
+        *_mission_regime_tex_lines(row, mission, config),
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\caption{Mission-regime energy estimate in the review-table format. Takeoff uses the payload-on climb condition; landing uses the post-delivery flaps-down slow/flare condition. Current is computed at nominal pack voltage.}",
+        r"\label{tab:stage3-mission-regime-energy}",
+        r"\end{table}",
+        (
+            rf"The mission-regime table sizes to a \textbf{{\num{{{_tex_float(row, 'mission_profile_capacity_required_mah'):.0f}}}~mAh}} "
+            rf"{int(_tex_float(row, 'mission_profile_battery_cell_count'))}S LiPo at "
+            rf"\SI{{{_tex_float(row, 'mission_profile_pack_voltage_v'):.1f}}}{{V}} nominal, including "
+            rf"{_tex_float(row, 'mission_profile_reserve_fraction') * 100.0:.0f}\% reserve. "
+            rf"The usable energy before reserve is \SI{{{_tex_float(row, 'mission_profile_usable_energy_wh'):.2f}}}{{Wh}}, "
+            rf"and the reserve-adjusted capacity is \SI{{{_tex_float(row, 'mission_profile_capacity_required_wh'):.2f}}}{{Wh}}."
+        ),
         "",
         r"\begin{table}[H]",
         r"\centering",
@@ -3359,8 +5192,8 @@ def write_stage3_engineering_tex(
         r"\toprule",
         r"Drag component & Clean cruise [N] & Flaps-down slow [N] \\",
         r"\midrule",
-        rf"Main wing profile / Stage~1 baseline & {_tex_float(row, 'cruise_wing_profile_drag_n'):.3f} & {_tex_float(row, 'low_speed_stage1_baseline_drag_n'):.3f} \\",
-        rf"Main wing induced & {_tex_float(row, 'cruise_wing_induced_drag_n'):.3f} & included in baseline \\",
+        rf"Main wing profile & {_tex_float(row, 'cruise_wing_profile_drag_n'):.3f} & {_tex_float(row, 'low_speed_wing_profile_drag_n'):.3f} \\",
+        rf"Main wing induced, used & {_tex_float(row, 'cruise_wing_induced_drag_n'):.3f} & {_tex_float(row, 'low_speed_wing_induced_drag_n'):.3f} \\",
         rf"Horizontal tail & {_tex_float(row, 'cruise_htail_drag_n'):.3f} & {_tex_float(row, 'low_speed_htail_drag_n'):.3f} \\",
         rf"Vertical tail & {_tex_float(row, 'cruise_vtail_drag_n'):.3f} & {_tex_float(row, 'low_speed_vtail_drag_n'):.3f} \\",
         rf"Fuselage & {_tex_float(row, 'cruise_fuselage_drag_n'):.3f} & {_tex_float(row, 'low_speed_fuselage_drag_n'):.3f} \\",
@@ -3368,7 +5201,7 @@ def write_stage3_engineering_tex(
         rf"Total & {_tex_float(row, 'cruise_drag_n'):.3f} & {_tex_float(row, 'low_speed_drag_n'):.3f} \\",
         r"\bottomrule",
         r"\end{tabular}",
-        r"\caption{Drag buildup for the clean cruise and flaps-down slow-flight sizing points.}",
+        r"\caption{Drag buildup for the clean cruise and flaps-down slow-flight sizing points. The slow-flight induced value is the physical split-panel sum; the freestream-equivalent value is retained only as a diagnostic check.}",
         r"\label{tab:stage3-drag-components}",
         r"\end{table}",
         "",
@@ -3402,6 +5235,9 @@ def write_stage3_engineering_tex(
         r"\toprule",
         r"Quantity & Symbol & Value \\",
         r"\midrule",
+        rf"Target sink rate & -- & \SI{{{_tex_float(row, 'approach_target_sink_rate_fps'):.2f}}}{{ft/s}} \\",
+        rf"Actual sink rate & -- & \SI{{{_tex_float(row, 'approach_sink_rate_mps'):.3f}}}{{m/s}} / \SI{{{_tex_float(row, 'approach_sink_rate_fps'):.2f}}}{{ft/s}} \\",
+        rf"Sink-rate target met & -- & {int(_tex_float(row, 'approach_sink_rate_target_met'))} \\",
         rf"Approach angle below horizontal & \(\gamma\) & \SI{{{_tex_float(row, 'approach_target_angle_deg'):.2f}}}{{deg}} \\",
         rf"Approach speed & \(V_A\) & \SI{{{_tex_float(row, 'approach_speed_mps'):.2f}}}{{m/s}} \\",
         rf"Flap deflection & \(\delta_f\) & \SI{{{_tex_float(row, 'approach_flap_deflection_deg'):.1f}}}{{deg}} \\",
@@ -3415,7 +5251,7 @@ def write_stage3_engineering_tex(
         rf"RPM & -- & \num{{{_tex_float(row, 'approach_rpm'):.0f}}} \\",
         rf"Elevator trim & \(\delta_e\) & \SI{{{_tex_float(row, 'approach_elevator_trim_deg'):.2f}}}{{deg}} \\",
         rf"Rudder trim & \(\delta_r\) & \SI{{{_tex_float(row, 'approach_rudder_trim_deg'):.2f}}}{{deg}} \\",
-        rf"Sink rate & -- & \SI{{{_tex_float(row, 'approach_sink_rate_mps'):.3f}}}{{m/s}} \\",
+        rf"Max descent rate limit & -- & \SI{{{_tex_float(row, 'approach_max_descent_rate_fps'):.2f}}}{{ft/s}} \\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\caption{Estimated trims and throttle setting for the configured approach angle.}",
@@ -3432,7 +5268,9 @@ def write_stage3_engineering_tex(
         rf"\Delta L = \SI{{{_tex_float(row, 'trim_residual_lift_n'):.6f}}}{{N}}, \qquad \Delta C_M = {_tex_float(row, 'trim_residual_cm'):.6f}.",
         r"\end{equation}",
         (
-            f"The trimmed cruise angle of attack is \\SI{{{_tex_float(row, 'cruise_alpha_deg'):.3f}}}{{deg}}, "
+            f"The airfoil-polar cruise body-angle proxy is \\SI{{{_tex_float(row, 'cruise_body_alpha_proxy_deg'):.3f}}}{{deg}}, "
+            f"with a wing-section alpha proxy of \\SI{{{_tex_float(row, 'cruise_section_alpha_proxy_deg'):.3f}}}{{deg}}. "
+            f"The VLM trim-alpha diagnostic is \\SI{{{_tex_float(row, 'cruise_alpha_deg'):.3f}}}{{deg}}, "
             f"and the horizontal-tail incidence is \\SI{{{_tex_float(row, 'htail_incidence_deg'):.3f}}}{{deg}}. "
             "The selected result has warning status "
             f"\\texttt{{{_tex_escape(warnings)}}}."
@@ -3574,6 +5412,93 @@ def refine_stage3_candidate(
         plot_path=drag_power_sweeps_path,
         components_path=drag_components_path,
     )
+    clean_condition_polar = _section_polar_from_stage3_polars(polars, "clean")
+    flapped_condition_polar = _section_polar_from_stage3_polars(polars, "flaps_down")
+    payload_mass_kg = max(config.payload_mass_lb, 0.0) * 0.45359237
+    post_delivery_mass_kg = max(
+        geometry["stage3_total_built_mass_kg"],
+        mission.gross_mass_kg - payload_mass_kg,
+    )
+    payload_on_performance = {
+        "mass_kg": mission.gross_mass_kg,
+        "cruise_cl_required": mission.gross_weight_n
+        / max(0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2 * mission.wing_area_m2, 1e-9),
+        "cruise_uniform_local_cl_required": geometry["cruise_uniform_local_cl_required"],
+        "cruise_drag_n": geometry["cruise_drag_n"],
+        "cruise_thrust_required_n": geometry["cruise_thrust_required_n"],
+        "cruise_throttle_percent": geometry["cruise_throttle_percent"],
+        "cruise_rpm": geometry["cruise_rpm"],
+        "cruise_power_w": geometry["cruise_power_w"],
+        "cruise_blown_effective_velocity_mps": geometry["cruise_blown_effective_velocity_mps"],
+        "cruise_effective_dynamic_pressure_pa": geometry["cruise_effective_dynamic_pressure_pa"],
+        "slow_cl_required": geometry["slow_flight_freestream_cl_required"],
+        "slow_uniform_local_cl_required": geometry["slow_flight_uniform_local_cl_required"],
+        "slow_drag_n": geometry["low_speed_drag_n"],
+        "slow_natural_drag_n": geometry["low_speed_natural_drag_n"],
+        "slow_added_drag_required_n": geometry["low_speed_added_drag_required_n"],
+        "slow_thrust_required_n": geometry["low_speed_thrust_required_n"],
+        "slow_throttle_percent": geometry["low_speed_throttle_percent"],
+        "slow_rpm": geometry["low_speed_rpm"],
+        "slow_power_w": geometry["low_speed_power_w"],
+        "slow_blown_effective_velocity_mps": geometry["low_speed_actual_veff_mps"],
+        "slow_effective_dynamic_pressure_pa": geometry["slow_flight_effective_dynamic_pressure_pa"],
+        "slow_unblown_local_cl": geometry["slow_flight_unblown_local_cl"],
+        "slow_blown_local_cl": geometry["slow_flight_blown_local_cl"],
+        "slow_local_cl_margin": geometry["slow_flight_local_cl_margin"],
+        "approach_cl_required": performance_outputs["approach_cl_required"],
+        "approach_uniform_local_cl_required": performance_outputs["approach_uniform_local_cl_required"],
+        "approach_drag_n": performance_outputs["approach_drag_n"],
+        "approach_thrust_required_n": performance_outputs["approach_thrust_required_n"],
+        "approach_throttle_percent": performance_outputs["approach_throttle_percent"],
+        "approach_rpm": performance_outputs["approach_rpm"],
+        "approach_power_w": performance_outputs["approach_power_w"],
+        "approach_blown_effective_velocity_mps": performance_outputs["approach_blown_effective_velocity_mps"],
+        "approach_effective_dynamic_pressure_pa": performance_outputs["approach_effective_dynamic_pressure_pa"],
+        "approach_elevator_trim_deg": performance_outputs["approach_elevator_trim_deg"],
+        "approach_rpm_feasible": performance_outputs["approach_rpm_feasible"],
+        "climb_cl_required": performance_outputs["climb_cl_required"],
+        "climb_uniform_local_cl_required": performance_outputs["climb_uniform_local_cl_required"],
+        "climb_drag_n": performance_outputs["climb_drag_n"],
+        "climb_thrust_required_n": performance_outputs["climb_thrust_required_n"],
+        "climb_throttle_percent": performance_outputs["climb_throttle_percent"],
+        "climb_rpm": performance_outputs["climb_rpm"],
+        "climb_power_w": performance_outputs["climb_power_w"],
+        "climb_blown_effective_velocity_mps": performance_outputs["climb_blown_effective_velocity_mps"],
+        "climb_effective_dynamic_pressure_pa": performance_outputs["climb_effective_dynamic_pressure_pa"],
+        "climb_elevator_trim_deg": performance_outputs["climb_elevator_trim_deg"],
+        "climb_rpm_feasible": performance_outputs["climb_rpm_feasible"],
+    }
+    post_delivery_performance = _mass_case_condition_summary(
+        mission,
+        candidate,
+        geometry,
+        config,
+        clean_condition_polar,
+        flapped_condition_polar,
+        post_delivery_mass_kg,
+    )
+
+    main_wing_clean_design_clmax = geometry["no_flap_clmax"] / max(
+        config.main_wing_pitch_up_stall_margin_factor,
+        1e-9,
+    )
+    main_wing_flapped_design_local_clmax = geometry["slow_flight_design_blown_local_clmax"]
+    payload_on_cruise_pitch_margin = (
+        main_wing_clean_design_clmax / max(payload_on_performance["cruise_uniform_local_cl_required"], 1e-9)
+        - 1.0
+    )
+    post_delivery_cruise_pitch_margin = (
+        main_wing_clean_design_clmax / max(post_delivery_performance["cruise_uniform_local_cl_required"], 1e-9)
+        - 1.0
+    )
+    payload_on_climb_pitch_margin = (
+        main_wing_clean_design_clmax / max(payload_on_performance["climb_uniform_local_cl_required"], 1e-9)
+        - 1.0
+    )
+    post_delivery_climb_pitch_margin = (
+        main_wing_clean_design_clmax / max(post_delivery_performance["climb_uniform_local_cl_required"], 1e-9)
+        - 1.0
+    )
 
     runtime = ensure_stage3_runtime()
     points, faces = neutral_airplane.mesh_body(method="quad", thin_wings=True, stack_meshes=True)
@@ -3586,12 +5511,22 @@ def refine_stage3_candidate(
         warnings.append("low_static_margin")
     if geometry["slow_flight_lift_margin_percent"] < 100.0 * config.min_slow_flight_lift_margin:
         warnings.append("low_slow_flight_lift_margin")
+    if geometry["slow_flight_feasible"] < 1.0:
+        warnings.append("slow_flight_infeasible")
+    if geometry["slow_flight_freestream_cl_required"] > geometry["flap_down_blown_clmax"]:
+        warnings.append("slow_flight_requires_powered_lift")
+    if geometry["clmax_was_capped"] > 0.5:
+        warnings.append("stage12_equivalent_clmax_capped")
     if geometry["slow_pitch_control_margin_percent"] < -1e-6:
         warnings.append("low_slow_pitch_control_authority")
     if geometry["slow_yaw_control_margin_percent"] < -1e-6:
         warnings.append("low_slow_yaw_control_authority")
+    if min(payload_on_cruise_pitch_margin, payload_on_climb_pitch_margin) < 0.0:
+        warnings.append("low_main_wing_pitch_up_stall_margin")
     if _safe_float(performance_outputs.get("approach_rpm_feasible"), 1.0) < 1.0:
         warnings.append("approach_throttle_saturated")
+    if _safe_float(performance_outputs.get("climb_rpm_feasible"), 1.0) < 1.0:
+        warnings.append("climb_throttle_saturated")
     if cm_alpha_per_deg >= 0.0:
         warnings.append("vlm_static_instability")
     if abs(vlm_trim.get("trim_residual_lift_n", 0.0)) > 1.0:
@@ -3606,6 +5541,13 @@ def refine_stage3_candidate(
         0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2 * mission.wing_area_m2
     )
     slow_energy_wh = geometry["low_speed_power_w"] * mission.climb_segment_min / 60.0
+    battery_cruise_energy_wh = geometry["cruise_power_w"] * config.battery_cruise_segment_min / 60.0
+    battery_slow_energy_wh = geometry["low_speed_power_w"] * config.battery_slow_segment_min / 60.0
+    battery_usable_energy_wh = battery_cruise_energy_wh + battery_slow_energy_wh
+    battery_capacity_required_wh = battery_usable_energy_wh / max(1.0 - mission.battery_reserve_fraction, 1e-9)
+    battery_pack_voltage_v = _mission_profile_pack_voltage_v(mission, config)
+    battery_capacity_required_mah = battery_capacity_required_wh / max(battery_pack_voltage_v, 1e-9) * 1000.0
+    battery_mass_required_kg = battery_capacity_required_wh / max(mission.battery_specific_energy_wh_per_kg, 1e-9)
     main_wing_re_cruise = (
         mission.air_density_kgpm3
         * mission.cruise_speed_mps
@@ -3614,7 +5556,7 @@ def refine_stage3_candidate(
     )
     main_wing_re_low_speed = (
         mission.air_density_kgpm3
-        * mission.low_speed_mps
+        * _stage3_slow_flight_speed_mps(config)
         * mission.chord_m
         / max(mission.dynamic_viscosity_pas, 1e-12)
     )
@@ -3626,7 +5568,7 @@ def refine_stage3_candidate(
     )
     htail_re_low_speed = (
         mission.air_density_kgpm3
-        * mission.low_speed_mps
+        * _stage3_slow_flight_speed_mps(config)
         * geometry["htail_mac_m"]
         / max(mission.dynamic_viscosity_pas, 1e-12)
     )
@@ -3638,9 +5580,36 @@ def refine_stage3_candidate(
     )
     vtail_re_low_speed = (
         mission.air_density_kgpm3
-        * mission.low_speed_mps
+        * _stage3_slow_flight_speed_mps(config)
         * geometry["vtail_mac_m"]
         / max(mission.dynamic_viscosity_pas, 1e-12)
+    )
+
+    mass_case_outputs: dict[str, float] = {
+        "payload_mass_lb": config.payload_mass_lb,
+        "payload_mass_kg": payload_mass_kg,
+        "payload_on_mass_kg": mission.gross_mass_kg,
+        "post_delivery_mass_kg": post_delivery_mass_kg,
+        "post_delivery_mass_delta_kg": mission.gross_mass_kg - post_delivery_mass_kg,
+        "battery_sizing_assumes_payload_on": 1.0,
+        "main_wing_pitch_up_stall_margin_factor": config.main_wing_pitch_up_stall_margin_factor,
+        "main_wing_clean_design_clmax_for_pitch_up": main_wing_clean_design_clmax,
+        "main_wing_flapped_design_local_clmax": main_wing_flapped_design_local_clmax,
+        "payload_on_cruise_pitch_up_stall_margin_percent": 100.0 * payload_on_cruise_pitch_margin,
+        "post_delivery_cruise_pitch_up_stall_margin_percent": 100.0 * post_delivery_cruise_pitch_margin,
+        "payload_on_climb_pitch_up_stall_margin_percent": 100.0 * payload_on_climb_pitch_margin,
+        "post_delivery_climb_pitch_up_stall_margin_percent": 100.0 * post_delivery_climb_pitch_margin,
+    }
+    for prefix, data in (
+        ("payload_on", payload_on_performance),
+        ("post_delivery", post_delivery_performance),
+    ):
+        for key, value in data.items():
+            mass_case_outputs[f"{prefix}_{key}"] = value
+    mission_regime_summary = _mission_regime_energy_summary(
+        {**geometry, **mass_case_outputs},
+        mission,
+        config,
     )
 
     return {
@@ -3660,16 +5629,23 @@ def refine_stage3_candidate(
         "wing_chord_m": mission.chord_m,
         "wing_area_m2": mission.wing_area_m2,
         "wing_aspect_ratio": mission.aspect_ratio,
-        "main_wing_incidence_deg": config.main_wing_incidence_deg,
+        "main_wing_incidence_deg": geometry["main_wing_incidence_deg"],
         "main_wing_washout_deg": config.main_wing_washout_deg,
         "prop_axial_location_fraction_of_chord": config.prop_axial_location_fraction_of_chord,
         "prop_axial_x_m": _prop_axial_x_m(mission, config),
         "propulsion_model_source": geometry["propulsion_model_source"],
         "ecalc_static_csv": config.ecalc_static_csv if config.ecalc_propulsion_enabled else "",
         "ecalc_dynamic_csv": config.ecalc_dynamic_csv if config.ecalc_propulsion_enabled else "",
+        "wiring_power_loss_factor": config.wiring_power_loss_factor,
+        "avionics_power_loss_factor": config.avionics_power_loss_factor,
+        "avionics_power_base_w": mission.avionics_power_w,
+        "avionics_power_with_losses_w": mission.avionics_power_w
+        * max(config.avionics_power_loss_factor, 0.0),
         "fuselage_nose_x_m": config.fuselage_nose_x_m,
         "fuselage_width_m": config.fuselage_width_m,
         "fuselage_height_m": config.fuselage_height_m,
+        "stage3_slow_flight_speed_mps": _stage3_slow_flight_speed_mps(config),
+        "upstream_stage12_low_speed_mps": mission.low_speed_mps,
         "flap_span_fraction": wing_context["flap_span_fraction"],
         "flap_chord_fraction": wing_context["flap_chord_fraction"],
         "flap_deflection_slow_deg": _slow_flap_deflection_deg(wing_context, config),
@@ -3724,14 +5700,28 @@ def refine_stage3_candidate(
         "total_tail_foam_mass_kg": geometry["total_tail_foam_mass_kg"],
         "stage1_total_built_mass_kg": geometry["stage1_total_built_mass_kg"],
         "stage3_total_built_mass_kg": geometry["stage3_total_built_mass_kg"],
+        "gross_flight_mass_kg": geometry["gross_flight_mass_kg"],
+        "remaining_mass_to_gross_kg": geometry["remaining_mass_to_gross_kg"],
         "mass_budget_margin_kg": geometry["mass_budget_margin_kg"],
         "blown_span_fraction": geometry["blown_span_fraction"],
         "clmax_source": geometry["clmax_source"],
         "clmax_curve_source": geometry["clmax_curve_source"],
+        "stage12_high_lift_polar_source": polars.get("stage12_high_lift_polar_source", ""),
+        "physical_clmax_source": geometry["physical_clmax_source"],
+        "stage12_clean_section_clmax_unblown": geometry["stage12_clean_section_clmax_unblown"],
+        "stage12_clean_section_clmax_blown": geometry["stage12_clean_section_clmax_blown"],
+        "stage12_flapped_section_clmax_unblown": geometry["stage12_flapped_section_clmax_unblown"],
+        "stage12_flapped_section_clmax_blown": geometry["stage12_flapped_section_clmax_blown"],
+        "stage12_weighted_blown_physical_clmax": geometry["stage12_weighted_blown_physical_clmax"],
         "no_flap_clmax": geometry["no_flap_clmax"],
         "flap_only_clmax": geometry["flap_only_clmax"],
         "clean_blowing_clmax": geometry["clean_blowing_clmax"],
         "flap_down_blown_clmax": geometry["flap_down_blown_clmax"],
+        "raw_no_flap_clmax": geometry["raw_no_flap_clmax"],
+        "raw_flap_only_clmax": geometry["raw_flap_only_clmax"],
+        "raw_clean_blowing_clmax": geometry["raw_clean_blowing_clmax"],
+        "raw_flap_down_blown_clmax": geometry["raw_flap_down_blown_clmax"],
+        "clmax_was_capped": geometry["clmax_was_capped"],
         "no_flap_clmax_alpha_deg": geometry["no_flap_clmax_alpha_deg"],
         "flap_only_clmax_alpha_deg": geometry["flap_only_clmax_alpha_deg"],
         "clean_blowing_clmax_alpha_deg": geometry["clean_blowing_clmax_alpha_deg"],
@@ -3740,8 +5730,12 @@ def refine_stage3_candidate(
         "slow_flight_stall_margin_factor": config.slow_flight_stall_margin_factor,
         "slow_flight_unblown_clmax": geometry["slow_flight_unblown_clmax"],
         "slow_flight_blown_clmax": geometry["slow_flight_blown_clmax"],
+        "slow_flight_blown_local_clmax": geometry["slow_flight_blown_local_clmax"],
+        "slow_flight_unblown_equivalent_clmax": geometry["slow_flight_unblown_equivalent_clmax"],
+        "slow_flight_blown_equivalent_clmax": geometry["slow_flight_blown_equivalent_clmax"],
         "slow_flight_design_unblown_clmax": geometry["slow_flight_design_unblown_clmax"],
         "slow_flight_design_blown_clmax": geometry["slow_flight_design_blown_clmax"],
+        "slow_flight_design_blown_local_clmax": geometry["slow_flight_design_blown_local_clmax"],
         "low_speed_required_veff_mps": geometry["low_speed_required_veff_mps"],
         "low_speed_actual_veff_mps": geometry["low_speed_actual_veff_mps"],
         "low_speed_drag_n": geometry["low_speed_drag_n"],
@@ -3750,6 +5744,14 @@ def refine_stage3_candidate(
         "low_speed_drag_delta_vs_cruise_n": geometry["low_speed_drag_delta_vs_cruise_n"],
         "low_speed_blown_lift_thrust_n": geometry["low_speed_blown_lift_thrust_n"],
         "low_speed_stage1_baseline_drag_n": geometry["low_speed_stage1_baseline_drag_n"],
+        "low_speed_wing_profile_drag_n": geometry["low_speed_wing_profile_drag_n"],
+        "low_speed_wing_induced_drag_n": geometry["low_speed_wing_induced_drag_n"],
+        "low_speed_wing_induced_local_drag_n": geometry["low_speed_wing_induced_local_drag_n"],
+        "low_speed_wing_induced_freestream_equiv_drag_n": geometry[
+            "low_speed_wing_induced_freestream_equiv_drag_n"
+        ],
+        "low_speed_unblown_induced_drag_n": geometry["low_speed_unblown_induced_drag_n"],
+        "low_speed_blown_induced_drag_n": geometry["low_speed_blown_induced_drag_n"],
         "low_speed_htail_drag_n": geometry["low_speed_htail_drag_n"],
         "low_speed_vtail_drag_n": geometry["low_speed_vtail_drag_n"],
         "low_speed_fuselage_drag_n": geometry["low_speed_fuselage_drag_n"],
@@ -3758,9 +5760,42 @@ def refine_stage3_candidate(
         "slow_flight_lift_margin_n": geometry["slow_flight_lift_margin_n"],
         "slow_flight_lift_margin_percent": geometry["slow_flight_lift_margin_percent"],
         "slow_flight_equiv_stall_speed_mps": geometry["slow_flight_equiv_stall_speed_mps"],
+        "slow_flight_freestream_cl_required": geometry["slow_flight_freestream_cl_required"],
+        "slow_flight_uniform_local_cl_required": geometry["slow_flight_uniform_local_cl_required"],
+        "slow_flight_unblown_dynamic_pressure_pa": geometry["slow_flight_unblown_dynamic_pressure_pa"],
+        "slow_flight_blown_dynamic_pressure_pa": geometry["slow_flight_blown_dynamic_pressure_pa"],
+        "slow_flight_effective_dynamic_pressure_pa": geometry["slow_flight_effective_dynamic_pressure_pa"],
+        "slow_flight_blown_to_unblown_q_ratio": geometry["slow_flight_blown_to_unblown_q_ratio"],
+        "slow_flight_blown_area_m2": geometry["slow_flight_blown_area_m2"],
+        "slow_flight_unblown_area_m2": geometry["slow_flight_unblown_area_m2"],
+        "slow_flight_unblown_local_cl": geometry["slow_flight_unblown_local_cl"],
+        "slow_flight_blown_local_cl": geometry["slow_flight_blown_local_cl"],
+        "slow_flight_local_cl_margin": geometry["slow_flight_local_cl_margin"],
+        "slow_flight_required_veff_margin_mps": geometry["slow_flight_required_veff_margin_mps"],
+        "slow_flight_feasible": geometry["slow_flight_feasible"],
         "low_speed_power_w": geometry["low_speed_power_w"],
+        "low_speed_propulsion_electric_power_without_aircraft_losses_w": geometry[
+            "low_speed_propulsion_electric_power_without_aircraft_losses_w"
+        ],
+        "low_speed_propulsion_wiring_loss_w": geometry["low_speed_propulsion_wiring_loss_w"],
+        "low_speed_avionics_power_loss_w": geometry["low_speed_avionics_power_loss_w"],
+        "low_speed_aircraft_power_losses_w": geometry["low_speed_aircraft_power_losses_w"],
         "low_speed_energy_wh": slow_energy_wh,
+        "battery_cruise_segment_min": config.battery_cruise_segment_min,
+        "battery_slow_segment_min": config.battery_slow_segment_min,
+        "battery_cruise_energy_wh": battery_cruise_energy_wh,
+        "battery_slow_energy_wh": battery_slow_energy_wh,
+        "battery_usable_energy_wh": battery_usable_energy_wh,
+        "battery_reserve_fraction": mission.battery_reserve_fraction,
+        "battery_capacity_required_wh": battery_capacity_required_wh,
+        "battery_pack_voltage_v": battery_pack_voltage_v,
+        "battery_capacity_required_mah": battery_capacity_required_mah,
+        "battery_mass_required_kg": battery_mass_required_kg,
+        **mission_regime_summary,
         "low_speed_rpm": geometry["low_speed_rpm"],
+        "low_speed_rpm_feasible": geometry["low_speed_rpm_feasible"],
+        "low_speed_thrust_required_n": geometry["low_speed_thrust_required_n"],
+        "low_speed_throttle_percent": geometry["low_speed_throttle_percent"],
         "low_speed_ct": geometry["low_speed_ct"],
         "low_speed_cp": geometry["low_speed_cp"],
         "cruise_drag_n": geometry["cruise_drag_n"],
@@ -3770,12 +5805,33 @@ def refine_stage3_candidate(
         "cruise_vtail_drag_n": geometry["cruise_vtail_drag_n"],
         "cruise_fuselage_drag_n": geometry["cruise_fuselage_drag_n"],
         "cruise_power_w": geometry["cruise_power_w"],
+        "cruise_propulsion_electric_power_without_aircraft_losses_w": geometry[
+            "cruise_propulsion_electric_power_without_aircraft_losses_w"
+        ],
+        "cruise_propulsion_wiring_loss_w": geometry["cruise_propulsion_wiring_loss_w"],
+        "cruise_avionics_power_loss_w": geometry["cruise_avionics_power_loss_w"],
+        "cruise_aircraft_power_losses_w": geometry["cruise_aircraft_power_losses_w"],
         "cruise_rpm": geometry["cruise_rpm"],
+        "cruise_rpm_feasible": geometry["cruise_rpm_feasible"],
+        "cruise_thrust_required_n": geometry["cruise_thrust_required_n"],
+        "cruise_throttle_percent": geometry["cruise_throttle_percent"],
         "cruise_ct": geometry["cruise_ct"],
         "cruise_cp": geometry["cruise_cp"],
+        "cruise_blown_effective_velocity_mps": geometry["cruise_blown_effective_velocity_mps"],
+        "cruise_unblown_dynamic_pressure_pa": geometry["cruise_unblown_dynamic_pressure_pa"],
+        "cruise_blown_dynamic_pressure_pa": geometry["cruise_blown_dynamic_pressure_pa"],
+        "cruise_effective_dynamic_pressure_pa": geometry["cruise_effective_dynamic_pressure_pa"],
+        "cruise_blown_to_unblown_q_ratio": geometry["cruise_blown_to_unblown_q_ratio"],
+        "cruise_uniform_local_cl_required": geometry["cruise_uniform_local_cl_required"],
         "cruise_alpha_deg": alpha_trim,
+        "cruise_body_alpha_proxy_deg": geometry["cruise_alpha_proxy_deg"],
+        "cruise_section_alpha_proxy_deg": geometry["cruise_section_alpha_proxy_deg"],
         "cruise_lift_n": vlm_trim.get("L", 0.0),
         "cruise_vlm_induced_drag_n": vlm_trim.get("D", 0.0),
+        "cruise_cl_required": mission.gross_weight_n / max(
+            0.5 * mission.air_density_kgpm3 * mission.cruise_speed_mps**2 * mission.wing_area_m2,
+            1e-9,
+        ),
         "cruise_cl": cruise_cl,
         "cruise_cd": cruise_cd,
         "cruise_l_over_d": cruise_cl / max(cruise_cd, 1e-9),
@@ -3804,5 +5860,10 @@ def refine_stage3_candidate(
         "drag_components_png": performance_outputs["drag_components_png"],
         "mesh_npz": str(mesh_path),
         "report_md": str(STAGE3_REPORT_MD),
-        **{key: value for key, value in performance_outputs.items() if key.startswith("approach_")},
+        **mass_case_outputs,
+        **{
+            key: value
+            for key, value in performance_outputs.items()
+            if key.startswith("approach_") or key.startswith("climb_")
+        },
     }

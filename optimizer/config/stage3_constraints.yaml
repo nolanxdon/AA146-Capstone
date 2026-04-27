@@ -20,24 +20,34 @@ stage3_sizing:
   tail_airfoil: naca0008
   foam_density_kgpm3: 25.0
 
-  # Fixed aerodynamic-surface incidences.
-  # main_wing_incidence_deg: geometric main-wing root incidence.
+  # Aerodynamic-surface incidences.
+  # main_wing_incidence_deg is only the initial seed; Stage 3 optimizes the final value
+  # inside main_wing_incidence_bounds_deg.
+  # target_cruise_body_alpha_deg biases the optimized incidence so the fuselage/body
+  # cruise angle of attack stays close to a sensible value.
   # main_wing_washout_deg: tip twist relative to root; negative means tip leading edge lower.
   # vertical_tail_incidence_deg: yawed/incidence setting for the vertical tail; usually 0.
+  main_wing_incidence_deg: 0.0
+  main_wing_incidence_bounds_deg: [-2.0, 4.5]
+  target_cruise_body_alpha_deg: 0.0
   vertical_tail_incidence_deg: 0.0
 
   # Stage 1/2 control-surface fallback values.
   # These are used only if Stage 1/2 control-surface CSVs are missing.
-  # In the normal workflow, Stage 3 reads flap/aileron geometry and CLmax from Stage 1/2 outputs.
+  # In the normal workflow, Stage 3 reads flap/aileron geometry and raw equivalent CLmax
+  # from Stage 1/2 outputs, then caps physical local CLmax to the limits below.
   flap_span_fraction_default: 0.65       # flap span as fraction of semispan
   flap_chord_fraction_default: 0.34      # flap chord as fraction of local wing chord
   flap_deflection_slow_deg: 40.0         # deployed slotted-flap angle for slow flight
-  slotted_flap_section_clmax: 3.0        # fallback 2D slotted-flap section CLmax
-  clean_outer_section_clmax: 1.45        # fallback clean outer-panel section CLmax
+  slotted_flap_section_clmax: 2.0        # fallback for flapped DAE51 local CLmax if Stage 1/2 polars are missing
+  clean_outer_section_clmax: 1.60        # fallback for clean DAE51 local CLmax if Stage 1/2 polars are missing
+  physical_clean_clmax_cap: 1.60         # fallback physical local CLmax cap when Stage 1/2 section polars are unavailable
+  physical_flapped_clmax_cap: 2.00       # fallback physical local CLmax cap when Stage 1/2 section polars are unavailable
   flap_down_3d_efficiency: 0.90          # fallback section-to-whole-wing CLmax multiplier
-  blown_flap_clmax_multiplier: 1.10      # fallback propwash CLmax multiplier
+  blown_flap_clmax_multiplier: 1.00      # propwash is modeled by higher q, not inflated airfoil CLmax
   slow_flight_stall_margin_factor: 1.20  # divides CLmax for sizing; 1.20 means 20% lift margin
   min_slow_flight_lift_margin: 0.10      # warning threshold after the stall-margin factor; 0.10 means 10%
+  main_wing_pitch_up_stall_margin_factor: 1.25 # review margin; 1.25 means required CL should be no more than 80% of local CLmax
 
   # Fixed aileron geometry fallback from Stage 1/2.
   # Elevator/rudder base chord fractions are reference values for the slow-flight sizing formula;
@@ -69,7 +79,7 @@ stage3_sizing:
   v_tail_area_bounds_m2: [0.025, 0.2]
   v_tail_aspect_ratio_bounds: [1.15, 2.60]
   v_tail_taper_bounds: [0.55, 1.0]       # tip chord / root chord
-  v_tail_root_chord_bounds_m: [0.10, 0.38]
+  v_tail_root_chord_bounds_m: [0.14, 0.38]
 
   # Tail arm and trim-incidence bounds.
   # tail_arm_bounds_m is the distance from main-wing aerodynamic center to tail aerodynamic center.
@@ -82,12 +92,8 @@ stage3_sizing:
   #   horizontal_tail_volume = S_h * l_t / (S_wing * MAC)
   #   vertical_tail_volume   = S_v * l_t / (S_wing * b_wing)
   # The min/max_* aliases are kept for backward compatibility with older code paths.
-  horizontal_tail_volume_range: [0.50, 0.95]
-  vertical_tail_volume_range: [0.035, 0.085]
-  min_horizontal_tail_volume: 0.50
-  max_horizontal_tail_volume: 0.95
-  min_vertical_tail_volume: 0.035
-  max_vertical_tail_volume: 0.085
+  horizontal_tail_volume_range: [0.5, 0.95]
+  vertical_tail_volume_range: [0.039, 0.041]
 
   # Longitudinal stability targets.
   # Static margin is measured in MAC, i.e. (neutral point - CG) / MAC.
@@ -96,6 +102,8 @@ stage3_sizing:
   max_static_margin_mac: 0.27
 
   # Geometry and aerodynamic coupling assumptions.
+  # payload_mass_lb: payload carried before delivery; post-delivery performance is
+  # reported at gross mass minus this payload, while battery sizing keeps payload on.
   # baseline_cg_fraction_mac: Stage 1/2 baseline CG before tail foam is added,
   # used only when enforce_target_cg is false.
   # enforce_target_cg: if true, Stage 3 back-calculates the required pre-tail
@@ -108,6 +116,7 @@ stage3_sizing:
   # tail_dynamic_pressure_ratio: q_tail/q_freestream at cruise for trim/stability.
   # downwash_gradient: d(epsilon)/d(alpha), nondimensional.
   baseline_cg_fraction_mac: 0.25
+  payload_mass_lb: 2.5
   enforce_target_cg: true
   target_cg_fraction_mac: 0.25
   baseline_cg_fraction_bounds_mac: [0.05, 0.45]
@@ -120,6 +129,7 @@ stage3_sizing:
   # Width/height are the current fuselage cross-section dimensions.
   # fuselage_cd_area_m2 is equivalent drag area: D_fuselage = q * CdA.
   # tail_zero_lift_cd is profile CD used for the H/V tail drag buildup.
+  fuselage_nose_x_m: -0.300
   fuselage_width_m: 0.170
   fuselage_height_m: 0.130
   fuselage_tail_width_m: 0.095
@@ -140,6 +150,18 @@ stage3_sizing:
   reference_cruise_power_w: 120.0
   reference_slow_flight_power_w: 220.0
 
+  # Frozen propulsion / main-wing selection from Stage 1/2.
+  # These values intentionally pin Stage 3 to the already-selected aircraft layout.
+  # Stage 3 will fail loudly if the Stage 2 CSV does not contain this exact concept,
+  # which prevents accidental drift when Stage 1/2 are rerun or resorted.
+  # Set fixed_propulsion_enabled to false only if you deliberately want Stage 3 to
+  # follow the first/current Stage 2 row instead.
+  fixed_propulsion_enabled: true
+  fixed_n_props: 10
+  fixed_prop_diameter_in: 5.5
+  fixed_prop_pitch_ratio: 0.40
+  fixed_prop_family: balanced
+
   # eCalc propeller calibration.
   # When enabled, Stage 3 replaces the generic Stage 1 prop surrogate with the
   # measured/eCalc static thrust-power table below for matching frozen hardware.
@@ -154,29 +176,60 @@ stage3_sizing:
   ecalc_reference_n_props: 10
   ecalc_reference_prop_diameter_in: 5.5
   ecalc_match_diameter_tolerance_in: 0.05
+  wiring_power_loss_factor: 1.08      # dimensionless; multiplies propulsion electric power for battery-to-ESC harness/connector/distribution losses
+  avionics_power_loss_factor: 1.10    # dimensionless; multiplies fixed avionics load for BEC/regulator and avionics wiring losses
 
   # Performance-sweep plots generated for the final ranked designs.
   # Velocity sweeps trim CL to support aircraft weight at each speed, then estimate drag and prop power.
   # Alpha sweeps hold speed fixed and vary angle of attack to show the drag/power trend across incidence.
   # clean_sweep_speed_mps should usually match cruise_speed_mps from Stage 1.
-  # flaps_down_sweep_speed_mps should usually match low_speed_mps from Stage 1.
+  # slow_flight_speed_mps is a Stage 3-only sizing condition. It does not rewrite
+  # the upstream Stage 1/2 low-speed assumptions or their generated CSVs.
+  # flaps_down_sweep_speed_mps should usually match slow_flight_speed_mps.
   performance_sweep_velocity_min_mps: 3.5  # lower x-axis speed for D(V) and P(V) plots
   performance_sweep_velocity_max_mps: 16.0 # upper x-axis speed for D(V) and P(V) plots
   performance_sweep_velocity_points: 51    # number of velocity samples in the sweep CSV/plot
   performance_sweep_alpha_min_deg: -4.0    # lower alpha bound for D(alpha) and P(alpha)
   performance_sweep_alpha_max_deg: 18.0    # upper alpha bound for D(alpha) and P(alpha)
   performance_sweep_alpha_points: 89       # number of alpha samples in the sweep CSV/plot
+  slow_flight_speed_mps: 4.0                # Stage 3-only slow-flight sizing speed; does not change Stage 1/2 outputs
   clean_sweep_speed_mps: 10.0              # fixed speed for clean alpha sweep
   flaps_down_sweep_speed_mps: 4.0          # fixed speed for flaps-down alpha sweep
 
   # Approach estimate assumptions.
-  # approach_target_angle_deg is the desired descent angle below horizontal; positive means descending.
+  # approach_target_sink_rate_fps is the desired rate of descent during approach.
+  # If this is physically too high for approach_speed_mps, Stage 3 clips it and reports that limit.
+  # approach_target_angle_deg is now a fallback if approach_target_sink_rate_fps is set to 0.
   # approach_speed_mps is the trimmed approach speed used with flaps deployed.
   # approach_flap_deflection_deg is the commanded flap setting for the approach calculation.
   # approach_max_elevator_trim_deg clips the estimated elevator trim command.
   # approach_tail_trim_effectiveness scales elevator trim power for hinge gaps, low-Re effects, and tail inflow losses.
   approach_target_angle_deg: 6.0
+  approach_target_sink_rate_fps: 6.0
   approach_speed_mps: 5.0
   approach_flap_deflection_deg: 40.0
   approach_max_elevator_trim_deg: 20.0
   approach_tail_trim_effectiveness: 0.85
+  max_climb_rate_fps: 6.0               # maximum climb rate checked in trim outputs
+  max_descent_rate_fps: 6.0             # maximum descent rate and nominal approach descent-rate target
+  climb_trim_speed_mps: 10.0            # speed used for max-climb trim estimate
+  climb_flap_deflection_deg: 0.0        # clean climb trim assumption
+
+  # Battery sizing mission segment.
+  # These durations are used only for the Stage 3 battery-capacity summary.
+  # The reported pack capacity includes the reserve fraction from Stage 1 mission config.
+  battery_cruise_segment_min: 20.0       # cruise duration for battery sizing
+  battery_slow_segment_min: 1.5          # slow-flight duration for battery sizing
+
+  # Mission-regime energy table.
+  # These values drive the report table in the same format as the review spreadsheet:
+  # takeoff uses the payload-on climb condition, pre-drop loiter uses payload-on cruise,
+  # drop/low-speed uses payload-on slow flight, post-drop loiter uses post-delivery cruise,
+  # and landing uses post-delivery flaps-down slow/flare power.
+  mission_profile_battery_cell_count: 4          # 4S lithium-polymer pack for current and mAh conversion
+  mission_profile_cell_nominal_voltage_v: 3.7    # nominal LiPo cell voltage; 4S gives 14.8 V
+  mission_profile_takeoff_time_min: 0.75         # takeoff/climb-out duration
+  mission_profile_loiter_pre_drop_time_min: 10.0 # cruise/loiter duration before payload drop
+  mission_profile_drop_low_speed_time_min: 1.0   # payload-drop low-speed duration
+  mission_profile_loiter_post_drop_time_min: 5.0 # return/loiter duration after payload drop
+  mission_profile_landing_time_min: 0.75         # final powered landing/flare duration
